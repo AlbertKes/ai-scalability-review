@@ -1,0 +1,90 @@
+import com.github.spotbugs.snom.Confidence
+
+plugins {
+    checkstyle apply false
+    pmd apply false
+    id("com.github.spotbugs") apply false
+    jacoco apply false
+    id("jacoco-report-aggregation") apply false
+}
+
+apply(plugin = "checkstyle")
+apply(plugin = "pmd")
+apply(plugin = "com.github.spotbugs")
+apply(plugin = "jacoco")
+apply(plugin = "jacoco-report-aggregation")
+
+checkstyle {
+    dependencies {
+        checkstyle("com.puppycrawl.tools:checkstyle:12.1.1")
+        checkstyle("com.github.sevntu-checkstyle:sevntu-checks:1.44.1")
+        constraints {
+            checkstyle("org.apache.commons:commons-lang3:3.18.0") {
+                because("Fixes CVE-2025-48924")
+            }
+            checkstyle("commons-codec:commons-codec:1.14") {
+                because("Fixes CWE-200")
+            }
+        }
+    }
+
+    configFile = rootProject.file("buildSrc/src/main/check/checkstyle.xml")
+    configProperties["configDir"] = configFile.parentFile
+
+    tasks.named<Checkstyle>("checkstyleMain") {
+        group = "verification"
+        source = fileTree(projectDir) {
+            include("conf/**/*.properties")
+            include("src/main/java/**/*.java")
+            include("src/main/**/*.properties")
+        }
+    }
+
+    tasks.named<Checkstyle>("checkstyleTest").configure {
+        group = "verification"
+        source = fileTree(projectDir) {
+            include("src/test/java/**/*.java")       // not include java files in resources
+            include("src/test/**/*.properties")
+        }
+    }
+}
+
+pmd {
+    ruleSets = listOf()
+    ruleSetFiles = rootProject.files("buildSrc/src/main/check/pmd.xml")
+    toolVersion = "7.18.0"
+    isConsoleOutput = true
+
+    tasks.withType<Pmd> {
+        group = "verification"
+    }
+}
+
+spotbugs {
+    dependencies {
+        spotbugsPlugins("com.mebigfatguy.sb-contrib:sb-contrib:7.6.15")
+        constraints {
+            add("spotbugs", "org.apache.logging.log4j:log4j-core:2.25.4") {
+                because("Fixes CVE-2026-34480/CVE-2026-34478")
+            }
+        }
+    }
+
+    toolVersion = "4.9.8"
+    reportLevel = Confidence.LOW
+    extraArgs = listOf("-longBugCodes")
+    includeFilter = rootProject.file("buildSrc/src/main/check/spotbugs.xml")
+}
+
+jacoco {
+    toolVersion = "0.8.14"
+
+    tasks.named<JacocoReport>("testCodeCoverageReport") {
+        reports {
+            xml.required = true
+            xml.outputLocation = layout.buildDirectory.file("reports/jacoco/report.xml").get()
+            html.required = true
+            csv.required = false
+        }
+    }
+}
