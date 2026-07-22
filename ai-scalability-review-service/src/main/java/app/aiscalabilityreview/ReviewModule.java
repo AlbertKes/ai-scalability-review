@@ -1,8 +1,10 @@
 package app.aiscalabilityreview;
 
+import app.aiscalabilityreview.api.LocalReviewWebService;
 import app.aiscalabilityreview.api.ReviewWebService;
 import app.aiscalabilityreview.api.ServiceConfigWebService;
 import app.aiscalabilityreview.job.ConfluenceFeedbackSyncJob;
+import app.aiscalabilityreview.job.LocalReviewJobExecutor;
 import app.aiscalabilityreview.job.ReviewJobExecutor;
 import app.aiscalabilityreview.job.ScheduledScalabilityReviewJob;
 import app.aiscalabilityreview.job.stage.AIScoringStage;
@@ -17,11 +19,14 @@ import app.aiscalabilityreview.service.AuditLogService;
 import app.aiscalabilityreview.service.AzureService;
 import app.aiscalabilityreview.service.ConfluenceService;
 import app.aiscalabilityreview.service.DatadogService;
+import app.aiscalabilityreview.service.GeminiCliService;
 import app.aiscalabilityreview.service.GitHubService;
+import app.aiscalabilityreview.service.LocalReviewService;
 import app.aiscalabilityreview.service.ReviewJobService;
 import app.aiscalabilityreview.service.ReviewReportService;
 import app.aiscalabilityreview.service.ReviewService;
 import app.aiscalabilityreview.service.ServiceConfigService;
+import app.aiscalabilityreview.web.LocalReviewWebServiceImpl;
 import app.aiscalabilityreview.web.ReviewWebServiceImpl;
 import app.aiscalabilityreview.web.ServiceConfigWebServiceImpl;
 import core.framework.module.Module;
@@ -47,6 +52,7 @@ public class ReviewModule extends Module {
         bind(ConfluenceService.class);
         bind(AuditLogService.class);
         bind(ReviewReportService.class);
+        bind(GeminiCliService.class);
     }
 
     private void bindStageExecutors() {
@@ -59,6 +65,8 @@ public class ReviewModule extends Module {
         bind(ReportPublishStage.class);
         bind(ReviewJobExecutor.class);
         bind(ReviewJobService.class);
+        bind(LocalReviewJobExecutor.class);
+        bind(LocalReviewService.class);
     }
 
     private void bindSchedule() {
@@ -69,5 +77,6 @@ public class ReviewModule extends Module {
     private void bindAPIServices() {
         api().service(ServiceConfigWebService.class, bind(ServiceConfigWebServiceImpl.class));
         api().service(ReviewWebService.class, bind(ReviewWebServiceImpl.class));
+        api().service(LocalReviewWebService.class, bind(LocalReviewWebServiceImpl.class));
     }
 }

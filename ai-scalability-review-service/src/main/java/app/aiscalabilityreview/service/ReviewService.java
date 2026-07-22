@@ -69,6 +69,30 @@ public class ReviewService {
         return job.jobId;
     }
 
+    /**
+     * Create a ReviewJob for a local (Gemini CLI) review run.
+     * Does not require a ServiceConfig to exist in MongoDB.
+     *
+     * @param serviceId   service being reviewed
+     * @param triggeredBy identifier of who triggered the run (e.g. serviceId or "api")
+     * @return the new job ID
+     */
+    public String createLocalReviewJob(String serviceId, String triggeredBy) {
+        ReviewJob job = new ReviewJob();
+        job.jobId = UUID.randomUUID().toString();
+        job.serviceId = serviceId;
+        job.triggerType = "MANUAL";
+        job.triggeredBy = triggeredBy;
+        job.aiModel = AIModel.GEMINI_2_5_PRO;
+        job.status = "PENDING";
+        job.startedAt = ZonedDateTime.now();
+        job.stageStatuses = new LinkedHashMap<>();
+
+        reviewJobCollection.insert(job);
+        logger.info("Created local review job {} for service {}", job.jobId, serviceId);
+        return job.jobId;
+    }
+
     public Optional<ReviewJob> getReviewJob(String jobId) {
         return reviewJobCollection.get(jobId);
     }

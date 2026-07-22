@@ -9,9 +9,9 @@ public class ValidationFormatPrompt {
         
         This file defines the mandatory output format for scalability review validation reports.
         
-        **File naming**: `scalability/ai/reports/<service>/<date>/<service>-validation-<report-YYYY-MM-DD>-run-<run-YYYY-MM-DD>.md`
+        **File naming**: `reports/<service>/<service>-validation-<report-YYYY-MM-DD>-run-<run-YYYY-MM-DD>.md`
         
-        Example: `scalability/ai/reports/wonder-cart-service/gemini/wonder-cart-service-validation-2026-07-08-run-2026-07-10.md`
+        Example: `reports/wonder-cart-service/wonder-cart-service-validation-2026-07-08-run-2026-07-10.md`
         
         ---
         

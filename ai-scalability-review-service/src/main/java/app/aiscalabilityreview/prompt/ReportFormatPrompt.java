@@ -42,7 +42,7 @@ public class ReportFormatPrompt {
         ## File Naming Convention
         
         ```
-        scalability/ai/reports/<service>-<YYYY-MM-DD>.md
+        reports/<service>-<YYYY-MM-DD>.md
         ```
         
         ---
