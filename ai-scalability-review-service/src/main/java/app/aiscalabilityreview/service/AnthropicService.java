@@ -1,5 +1,6 @@
 package app.aiscalabilityreview.service;
 
+import app.aiscalabilityreview.domain.embedded.AIModel;
 import core.framework.http.HTTPClient;
 import core.framework.http.HTTPMethod;
 import core.framework.http.HTTPRequest;
@@ -25,21 +26,21 @@ public class AnthropicService {
     /**
      * Send a prompt to the Anthropic Claude API and return the generated content.
      *
-     * @param modelId      Claude model ID, e.g. "claude-sonnet-4-6"
+     * @param aiModel      AI model
      * @param systemPrompt system prompt text
      * @param userPrompt   user message text
      * @param maxTokens    maximum tokens to generate
      * @param temperature  sampling temperature (0.0 – 1.0)
      * @return GeneratedContent with response text and token usage
      */
-    public GeneratedContent generate(String modelId, String systemPrompt, String userPrompt, int maxTokens, double temperature) {
+    public GeneratedContent generate(AIModel aiModel, String systemPrompt, String userPrompt, int maxTokens, double temperature) {
         String apiKey = System.getenv("ANTHROPIC_API_KEY");
         if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException("ANTHROPIC_API_KEY environment variable is not set");
         }
 
         AnthropicRequest requestBody = new AnthropicRequest();
-        requestBody.model = modelId;
+        requestBody.model = aiModelString(aiModel);
         requestBody.maxTokens = maxTokens;
         requestBody.temperature = temperature;
         requestBody.system = systemPrompt;
@@ -85,9 +86,17 @@ public class AnthropicService {
         double estimatedCostUsd = (inputTokens * 3.0 + outputTokens * 15.0) / 1_000_000.0;
 
         logger.info("Anthropic API call completed: model={}, inputTokens={}, outputTokens={}, durationMs={}, estimatedCostUsd={}",
-            modelId, inputTokens, outputTokens, durationMs, estimatedCostUsd);
+            aiModelString(aiModel), inputTokens, outputTokens, durationMs, estimatedCostUsd);
 
         return new GeneratedContent(text, inputTokens, outputTokens, estimatedCostUsd);
+    }
+
+    private String aiModelString(AIModel aiModel) {
+        if (aiModel == null) return null;
+        return switch (aiModel) {
+            case CLAUDE_SONNET_4_6 -> "claude-sonnet-4-6";
+            case GEMINI_2_5_PRO -> "gemini-2-5-pro";
+        };
     }
 
     public static class AnthropicRequest {

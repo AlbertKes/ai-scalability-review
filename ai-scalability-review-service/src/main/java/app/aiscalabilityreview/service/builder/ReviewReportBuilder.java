@@ -2,6 +2,7 @@ package app.aiscalabilityreview.service.builder;
 
 import app.aiscalabilityreview.api.review.GetReviewReportValidationResponse;
 import app.aiscalabilityreview.api.review.ReviewReportView;
+import app.aiscalabilityreview.api.serviceconfig.embedded.AIModelView;
 import app.aiscalabilityreview.domain.ReviewReport;
 import app.aiscalabilityreview.domain.ValidationResult;
 
@@ -12,7 +13,7 @@ public class ReviewReportBuilder {
         view.jobId = report.jobId;
         view.serviceId = report.serviceId;
         view.periodLabel = report.periodLabel;
-        view.aiModel = report.aiModel;
+        view.aiModel = AIModelView.valueOf(report.aiModel.name());
         view.reportMarkdown = report.reportMarkdown;
         view.confluencePageUrl = report.confluencePageUrl;
         view.generatedAt = report.generatedAt;
@@ -32,7 +33,7 @@ public class ReviewReportBuilder {
         response.validationId = result.validationId;
         response.reportId = result.reportId;
         response.serviceId = result.serviceId;
-        response.aiModel = result.aiModel;
+        response.aiModel = AIModelView.valueOf(result.aiModel.name());
         response.status = result.status;
         response.verdict = result.verdict;
         response.inputTokens = result.inputTokens;

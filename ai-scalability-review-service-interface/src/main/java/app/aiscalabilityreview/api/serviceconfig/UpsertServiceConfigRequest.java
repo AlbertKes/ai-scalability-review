@@ -1,5 +1,9 @@
 package app.aiscalabilityreview.api.serviceconfig;
 
+import app.aiscalabilityreview.api.serviceconfig.embedded.AIModelView;
+import app.aiscalabilityreview.api.serviceconfig.embedded.EnvironmentView;
+import app.aiscalabilityreview.api.serviceconfig.embedded.HPATypeView;
+import app.aiscalabilityreview.api.serviceconfig.embedded.ServiceTierView;
 import core.framework.api.json.Property;
 import core.framework.api.validate.NotBlank;
 import core.framework.api.validate.NotNull;
@@ -22,24 +26,60 @@ public class UpsertServiceConfigRequest {
     public String team;
 
     @NotNull
-    @NotBlank
     @Property(name = "tier")
-    public String tier;
+    public ServiceTierView tier;
 
     @NotNull
     @Property(name = "repositories")
     public Repositories repositories;
 
     @NotNull
-    @Property(name = "review")
-    public ReviewConfig review;
+    @Property(name = "review_config")
+    public ReviewConfig reviewConfig;
 
     @NotNull
     @Property(name = "runtime")
     public Runtime runtime;
 
+    @NotNull
     @Property(name = "enabled")
-    public Boolean enabled;
+    public Boolean enabled = Boolean.TRUE;
+
+    @NotNull
+    @NotBlank
+    @Property(name = "operator")
+    public String operator;
+
+    public static class RepoConfig {
+        @NotNull
+        @NotBlank
+        @Property(name = "url")
+        public String url;
+
+        @NotNull
+        @NotBlank
+        @Property(name = "branch")
+        public String branch = "main";
+
+        @Property(name = "service_path")
+        public String servicePath;
+
+        @Property(name = "include_paths")
+        public List<String> includePaths;
+
+        @Property(name = "exclude_paths")
+        public List<String> excludePaths;
+    }
+
+    public static class DeploymentConfig {
+        @NotNull
+        @NotBlank
+        @Property(name = "name")
+        public String name;
+
+        @Property(name = "type")
+        public String type;
+    }
 
     public static class Repositories {
         @NotNull
@@ -51,27 +91,6 @@ public class UpsertServiceConfigRequest {
 
         @Property(name = "k8s_gitops")
         public RepoConfig k8sGitops;
-
-        public static class RepoConfig {
-            @NotNull
-            @NotBlank
-            @Property(name = "url")
-            public String url;
-
-            @NotNull
-            @NotBlank
-            @Property(name = "branch")
-            public String branch;
-
-            @Property(name = "service_path")
-            public String servicePath;
-
-            @Property(name = "include_paths")
-            public List<String> includePaths;
-
-            @Property(name = "exclude_paths")
-            public List<String> excludePaths;
-        }
     }
 
     public static class ReviewConfig {
@@ -81,12 +100,12 @@ public class UpsertServiceConfigRequest {
         public String schedule;
 
         @NotNull
-        @NotBlank
         @Property(name = "ai_model")
-        public String aiModel;
+        public AIModelView aiModel = AIModelView.GEMINI_2_5_PRO;
 
+        @NotNull
         @Property(name = "metric_lookback_days")
-        public Integer metricLookbackDays;
+        public Integer metricLookbackDays = 30;
 
         @Property(name = "confluence_space_key")
         public String confluenceSpaceKey;
@@ -97,20 +116,21 @@ public class UpsertServiceConfigRequest {
 
     public static class Runtime {
         @NotNull
-        @NotBlank
         @Property(name = "environment")
-        public String environment;
+        public EnvironmentView environment = EnvironmentView.UAT;
 
         @NotNull
         @NotBlank
         @Property(name = "namespace")
         public String namespace;
 
+        @NotNull
         @Property(name = "deployments")
         public List<DeploymentConfig> deployments;
 
+        @NotNull
         @Property(name = "hpa_type")
-        public String hpaType;
+        public HPATypeView hpaType = HPATypeView.NONE;
 
         @Property(name = "kafka_consumer_groups")
         public List<String> kafkaConsumerGroups;
@@ -119,7 +139,7 @@ public class UpsertServiceConfigRequest {
         public String mysqlHost;
 
         @Property(name = "mysql_db")
-        public String mysqlDb;
+        public String mysqlDB;
 
         @Property(name = "atlas_cluster")
         public String atlasCluster;
@@ -127,19 +147,8 @@ public class UpsertServiceConfigRequest {
         @Property(name = "redis_enabled")
         public Boolean redisEnabled;
 
-        @Property(name = "datadog_domain")
-        public String datadogDomain;
-
-        public static class DeploymentConfig {
-            @NotNull
-            @NotBlank
-            @Property(name = "name")
-            public String name;
-
-            @NotNull
-            @NotBlank
-            @Property(name = "type")
-            public String type;
-        }
+        @NotNull
+        @Property(name = "domain")
+        public String domain;
     }
 }

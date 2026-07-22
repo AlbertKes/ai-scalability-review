@@ -1,4 +1,4 @@
-package app.aiscalabilityreview.api.serviceconfig;
+package app.aiscalabilityreview.api.serviceconfig.embedded;
 
 import core.framework.api.json.Property;
 
@@ -15,7 +15,7 @@ public class ServiceConfigView {
     public String team;
 
     @Property(name = "tier")
-    public String tier;
+    public ServiceTierView tier;
 
     @Property(name = "enabled")
     public Boolean enabled;
@@ -24,10 +24,10 @@ public class ServiceConfigView {
     public String reviewSchedule;
 
     @Property(name = "ai_model")
-    public String aiModel;
+    public AIModelView aiModel;
 
     @Property(name = "environment")
-    public String environment;
+    public EnvironmentView environment;
 
     @Property(name = "created_at")
     public ZonedDateTime createdAt;

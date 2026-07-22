@@ -26,6 +26,10 @@ import java.util.UUID;
 public class ConfluenceFeedbackSyncJob implements Job {
     private static final String FEEDBACK_PREFIX = "[FEEDBACK]";
     private static final int LOOKBACK_DAYS = 90;
+    private static final String[] KNOWN_DIMENSIONS = {
+        "Traffic & Throughput", "Latency & Thread Concurrency",
+        "Error Rates & Stability", "Resource Saturation", "Persistence Layer"
+    };
 
     private final Logger logger = LoggerFactory.getLogger(ConfluenceFeedbackSyncJob.class);
 
@@ -109,10 +113,7 @@ public class ConfluenceFeedbackSyncJob implements Job {
         if (colonIdx > 0 && colonIdx < 50) {
             String candidate = stripped.substring(0, colonIdx).trim();
             // Validate against known dimension names
-            for (String dim : new String[]{
-                "Traffic & Throughput", "Latency & Thread Concurrency",
-                "Error Rates & Stability", "Resource Saturation", "Persistence Layer"
-            }) {
+            for (String dim : KNOWN_DIMENSIONS) {
                 if (candidate.equalsIgnoreCase(dim) || dim.toLowerCase(Locale.US).contains(candidate.toLowerCase(Locale.US))) {
                     return dim;
                 }

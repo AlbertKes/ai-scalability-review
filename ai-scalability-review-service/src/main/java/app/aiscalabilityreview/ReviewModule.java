@@ -21,6 +21,7 @@ import app.aiscalabilityreview.service.GitHubService;
 import app.aiscalabilityreview.service.ReviewJobService;
 import app.aiscalabilityreview.service.ReviewReportService;
 import app.aiscalabilityreview.service.ReviewService;
+import app.aiscalabilityreview.service.ServiceConfigService;
 import app.aiscalabilityreview.web.ReviewWebServiceImpl;
 import app.aiscalabilityreview.web.ServiceConfigWebServiceImpl;
 import core.framework.module.Module;
@@ -37,6 +38,7 @@ public class ReviewModule extends Module {
     }
 
     private void bindServices() {
+        bind(ServiceConfigService.class);
         bind(ReviewService.class);
         bind(AnthropicService.class);
         bind(GitHubService.class);

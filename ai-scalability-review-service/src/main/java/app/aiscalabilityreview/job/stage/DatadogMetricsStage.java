@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Stage 4: Query Datadog metrics for the service over a 28-day lookback window.
@@ -29,30 +30,29 @@ public class DatadogMetricsStage {
 
     public void execute(ReviewContext context) throws Exception {
         ServiceConfig config = context.config;
-        String env = config.environment;
+        String env = config.runtime.environment.name().toLowerCase(Locale.US);
         String svc = config.serviceId;
-        String namespace = config.namespace;
         long now = Instant.now().getEpochSecond();
         long from = now - SECONDS_28_DAYS;
-        StringBuilder metricsText = new StringBuilder();
+        StringBuilder metricsText = new StringBuilder(512);
         metricsText.append("## Datadog Metrics (28-day lookback)\n\n");
-        List<String[]> queries = buildQueries(config, env, svc, namespace);
+        List<String[]> queries = buildQueries(config, env, svc);
         for (String[] qDef : queries) {
             String label = qDef[0];
             String query = qDef[1];
-            metricsText.append("### ").append(label).append("\n");
-            metricsText.append("`[Source: Datadog MCP → query_metrics(\"").append(query).append("\")]`\n\n");
+            metricsText.append("### ").append(label)
+                    .append("\n`[Source: Datadog MCP → query_metrics(\"").append(query).append("\")]`\n\n");
             queryMetrics(context, query, from, now, metricsText, svc);
         }
 
         try {
             String monitors = datadogService.listMonitors(svc);
-            metricsText.append("### SLO & Monitors\n");
-            metricsText.append("`[Source: Datadog MCP → list_monitors(service:").append(svc).append(")]`\n\n");
-            metricsText.append(monitors).append("\n\n");
+            metricsText.append("### SLO & Monitors\n`[Source: Datadog MCP → list_monitors(service:")
+                    .append(svc).append(")]`\n\n")
+                    .append(monitors).append("\n\n");
         } catch (Exception e) {
-            metricsText.append("### SLO & Monitors\n");
-            metricsText.append("NOT_COLLECTED: Datadog monitors query failed — ").append(e.getMessage()).append("\n\n");
+            metricsText.append("### SLO & Monitors\nNOT_COLLECTED: Datadog monitors query failed — ")
+                    .append(e.getMessage()).append("\n\n");
         }
 
         context.datadogMetricsData = metricsText.toString();
@@ -61,13 +61,11 @@ public class DatadogMetricsStage {
 
     private void queryMetrics(ReviewContext context, String query, long from, long now, StringBuilder metricsText, String svc) {
         long startMs = System.currentTimeMillis();
-        boolean success = false;
         String resultSummary;
 
         try {
             DatadogService.MetricQueryResult result = datadogService.queryMetrics(query, from, now);
             long durationMs = System.currentTimeMillis() - startMs;
-            success = true;
 
             resultSummary = formatResult(result);
             metricsText.append(resultSummary).append("\n\n");
@@ -91,7 +89,7 @@ public class DatadogMetricsStage {
         }
     }
 
-    private List<String[]> buildQueries(ServiceConfig config, String env, String svc, String ns) {
+    private List<String[]> buildQueries(ServiceConfig config, String env, String svc) {
         List<String[]> queries = new ArrayList<>();
         // Traffic
         queries.add(new String[]{"Request Rate (RPS)",
@@ -123,8 +121,8 @@ public class DatadogMetricsStage {
         queries.add(new String[]{"Replica Count Max",
             "max:kubernetes_state.deployment.replicas{env:" + env + ",kube_deployment:" + svc + "}"});
         // Kafka
-        if (config.kafkaConsumerGroups != null && !config.kafkaConsumerGroups.isEmpty()) {
-            String groups = String.join(",", config.kafkaConsumerGroups);
+        if (config.runtime.kafkaConsumerGroups != null && !config.runtime.kafkaConsumerGroups.isEmpty()) {
+            String groups = String.join(",", config.runtime.kafkaConsumerGroups);
             queries.add(new String[]{"Kafka Consumer Lag",
                 "max:kafka.consumer_lag{env:" + env + ",consumer_group:" + groups + "} by {topic}"});
         }
@@ -135,22 +133,22 @@ public class DatadogMetricsStage {
 
     private void buildMySQLQueries(ServiceConfig config, List<String[]> queries) {
         // MySQL
-        if (config.mysqlHost != null && !config.mysqlHost.isBlank()) {
+        if (config.runtime.mysqlHost != null && !config.runtime.mysqlHost.isBlank()) {
             queries.add(new String[]{"MySQL Active Connections Avg",
-                "avg:azure.dbformysql_flexibleservers.active_connections{name:" + config.mysqlHost + "}"});
+                "avg:azure.dbformysql_flexibleservers.active_connections{name:" + config.runtime.mysqlHost + "}"});
             queries.add(new String[]{"MySQL Active Connections Max",
-                "max:azure.dbformysql_flexibleservers.active_connections{name:" + config.mysqlHost + "}"});
+                "max:azure.dbformysql_flexibleservers.active_connections{name:" + config.runtime.mysqlHost + "}"});
             queries.add(new String[]{"MySQL Slow Queries",
-                "sum:azure.dbformysql_flexibleservers.slow_queries{name:" + config.mysqlHost + "}.as_count()"});
+                "sum:azure.dbformysql_flexibleservers.slow_queries{name:" + config.runtime.mysqlHost + "}.as_count()"});
             queries.add(new String[]{"MySQL Replication Lag",
-                "max:azure.dbformysql_flexibleservers.replication_lag{name:" + config.mysqlHost + "-*}"});
+                "max:azure.dbformysql_flexibleservers.replication_lag{name:" + config.runtime.mysqlHost + "-*}"});
         }
     }
 
     private void buildAtlasQueries(ServiceConfig config, List<String[]> queries) {
         // MongoDB Atlas
-        if (config.atlasCluster != null && !config.atlasCluster.isBlank()) {
-            String cluster = config.atlasCluster;
+        if (config.runtime.atlasCluster != null && !config.runtime.atlasCluster.isBlank()) {
+            String cluster = config.runtime.atlasCluster;
             queries.add(new String[]{"MongoDB Read Latency",
                 "avg:mongodb.atlas.oplatencies.reads.avg{clustername:" + cluster + "}"});
             queries.add(new String[]{"MongoDB Write Latency",

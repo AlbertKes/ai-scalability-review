@@ -1,5 +1,6 @@
 package app.aiscalabilityreview.api.review;
 
+import app.aiscalabilityreview.api.serviceconfig.embedded.AIModelView;
 import core.framework.api.json.Property;
 
 import java.time.ZonedDateTime;
@@ -15,7 +16,7 @@ public class GetReviewReportValidationResponse {
     public String serviceId;
 
     @Property(name = "ai_model")
-    public String aiModel;
+    public AIModelView aiModel;
 
     @Property(name = "status")
     public String status;

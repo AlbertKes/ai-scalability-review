@@ -3,6 +3,7 @@ package app.aiscalabilityreview.job.stage;
 import app.aiscalabilityreview.domain.ServiceConfig;
 import app.aiscalabilityreview.service.AuditLogService;
 import core.framework.inject.Inject;
+import core.framework.util.Strings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,8 +38,7 @@ public class MySQLTableStage {
 
     public void execute(ReviewContext context) throws Exception {
         ServiceConfig config = context.config;
-        if (config.mysqlHost == null || config.mysqlHost.isBlank()
-                || config.mysqlDb == null || config.mysqlDb.isBlank()) {
+        if (Strings.isBlank(config.runtime.mysqlHost) || Strings.isBlank(config.runtime.mysqlDB)) {
             context.mysqlTableData = "NOT_COLLECTED: MySQL MCP not configured (mysqlHost or mysqlDb is empty)";
             return;
         }
@@ -50,73 +50,76 @@ public class MySQLTableStage {
             context.mysqlTableData = "NOT_COLLECTED: MySQL MCP error — MYSQL_USER or MYSQL_PASSWORD not configured";
             return;
         }
-        String jdbcUrl = "jdbc:mysql://" + config.mysqlHost + ":" + mysqlPort
-                + "/" + config.mysqlDb + "?useSSL=true&requireSSL=false&connectTimeout=10000&socketTimeout=30000";
-        logger.info("Querying MySQL table sizes for {}/{}", config.mysqlHost, config.mysqlDb);
+        String jdbcUrl = "jdbc:mysql://" + config.runtime.mysqlHost + ':' + mysqlPort
+                + '/' + config.runtime.mysqlDB + "?useSSL=true&requireSSL=false&connectTimeout=10000&socketTimeout=30000";
+        logger.info("Querying MySQL table sizes for {}/{}", config.runtime.mysqlHost, config.runtime.mysqlDB);
+        context.mysqlTableData = queryTableData(context, jdbcUrl, mysqlUser, mysqlPassword, config);
+    }
 
+    private String queryTableData(ReviewContext context, String jdbcUrl, String user, String password, ServiceConfig config) {
         long startMs = System.currentTimeMillis();
-        StringBuilder tableData = new StringBuilder();
-        tableData.append("## MySQL Table Size Analysis\n\n");
-        tableData.append("```\n");
-        tableData.append("-- [Source: MySQL MCP (").append(config.mysqlHost).append("-").append(config.mysqlDb).append(") →\n");
-        tableData.append("SELECT table_name, table_rows, ROUND(data_length/1024/1024,2) AS data_mb,\n");
-        tableData.append("       ROUND(index_length/1024/1024,2) AS index_mb,\n");
-        tableData.append("       ROUND((data_length+index_length)/1024/1024,2) AS total_mb\n");
-        tableData.append("FROM information_schema.tables WHERE table_schema='").append(config.mysqlDb).append("'\n");
-        tableData.append("ORDER BY (data_length+index_length) DESC LIMIT 20;\n");
-        tableData.append("-- ]\n```\n\n");
-
-        try (Connection conn = DriverManager.getConnection(jdbcUrl, mysqlUser, mysqlPassword);
+        StringBuilder tableData = buildTableHeader(config);
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, user, password);
              PreparedStatement stmt = conn.prepareStatement(TOP_TABLES_SQL)) {
-            stmt.setString(1, config.mysqlDb);
+            stmt.setString(1, config.runtime.mysqlDB);
             ResultSet rs = stmt.executeQuery();
-            tableData.append("| Table | Rows | Data (MB) | Index (MB) | Total (MB) |\n");
-            tableData.append("| :--- | ---: | ---: | ---: | ---: |\n");
-            double totalMb = 0;
-            int tableCount = 0;
-            while (rs.next()) {
-                String tableName = rs.getString("table_name");
-                long tableRows = rs.getLong("table_rows");
-                double dataMb = rs.getDouble("data_mb");
-                double indexMb = rs.getDouble("index_mb");
-                double totalTableMb = rs.getDouble("total_mb");
-
-                tableData.append("| ").append(tableName)
-                        .append(" | ").append(tableRows)
-                        .append(" | ").append(String.format("%.2f", dataMb))
-                        .append(" | ").append(String.format("%.2f", indexMb))
-                        .append(" | ").append(String.format("%.2f", totalTableMb))
-                        .append(" |\n");
-
-                totalMb += totalTableMb;
-                tableCount++;
-
-                if (totalTableMb > 10_240) {
-                    tableData.append("  ⚠️  **Notable: ").append(tableName).append(" exceeds 10 GB**\n");
-                }
-            }
-
-            tableData.append("\n**Total (top ").append(tableCount).append(" tables)**: ")
-                    .append(String.format("%.2f GB", totalMb / 1024))
-                    .append(" `[Source: MySQL MCP (").append(config.mysqlHost).append("-").append(config.mysqlDb)
-                    .append(") → SELECT SUM(data_length+index_length) FROM information_schema.tables WHERE table_schema='")
-                    .append(config.mysqlDb).append("']`\n");
-
+            int[] counts = appendTableRows(rs, tableData, config);
+            int tableCount = counts[0];
             long durationMs = System.currentTimeMillis() - startMs;
             auditLogService.log(new AuditLogService.AuditLogParam(context.job.jobId, config.serviceId,
                     "MYSQL_TABLE_QUERY", "MySQLTableStage",
-                    config.mysqlHost + "/" + config.mysqlDb,
+                    config.runtime.mysqlHost + "/" + config.runtime.mysqlDB,
                     "Top 20 tables by storage",
                     null, 200, durationMs,
                     "Fetched " + tableCount + " rows", null, true));
-
-            logger.info("MySQL table query complete for {}/{}: {} tables, {} GB total",
-                    config.mysqlHost, config.mysqlDb, tableCount, String.format("%.2f", totalMb / 1024));
-
+            logger.info("MySQL table query complete for {}/{}: {} tables", config.runtime.mysqlHost, config.runtime.mysqlDB, tableCount);
         } catch (SQLException e) {
-            tableData = handleException(context, e, startMs, config);
+            return handleException(context, e, startMs, config).toString();
         }
-        context.mysqlTableData = tableData.toString();
+        return tableData.toString();
+    }
+
+    private StringBuilder buildTableHeader(ServiceConfig config) {
+        return new StringBuilder(2048)
+                .append("## MySQL Table Size Analysis\n\n```\n")
+                .append("-- [Source: MySQL MCP (").append(config.runtime.mysqlHost).append('-').append(config.runtime.mysqlDB).append(") \u2192\n")
+                .append("SELECT table_name, table_rows, ROUND(data_length/1024/1024,2) AS data_mb,\n")
+                .append("       ROUND(index_length/1024/1024,2) AS index_mb,\n")
+                .append("       ROUND((data_length+index_length)/1024/1024,2) AS total_mb\n")
+                .append("FROM information_schema.tables WHERE table_schema='").append(config.runtime.mysqlDB).append("'\n")
+                .append("ORDER BY (data_length+index_length) DESC LIMIT 20;\n")
+                .append("-- ]\n```\n\n")
+                .append("| Table | Rows | Data (MB) | Index (MB) | Total (MB) |\n")
+                .append("| :--- | ---: | ---: | ---: | ---: |\n");
+    }
+
+    private int[] appendTableRows(ResultSet rs, StringBuilder tableData, ServiceConfig config) throws SQLException {
+        double totalMb = 0;
+        int tableCount = 0;
+        while (rs.next()) {
+            String tableName = rs.getString("table_name");
+            long tableRows = rs.getLong("table_rows");
+            double dataMb = rs.getDouble("data_mb");
+            double indexMb = rs.getDouble("index_mb");
+            double totalTableMb = rs.getDouble("total_mb");
+            tableData.append("| ").append(tableName)
+                    .append(" | ").append(tableRows)
+                    .append(" | ").append(String.format("%.2f", dataMb))
+                    .append(" | ").append(String.format("%.2f", indexMb))
+                    .append(" | ").append(String.format("%.2f", totalTableMb))
+                    .append(" |\n");
+            if (totalTableMb > 10_240) {
+                tableData.append("  ⚠️  **Notable: ").append(tableName).append(" exceeds 10 GB**\n");
+            }
+            totalMb += totalTableMb;
+            tableCount++;
+        }
+        tableData.append("\n**Total (top ").append(tableCount).append(" tables)**: ")
+                .append(String.format("%.2f GB", totalMb / 1024))
+                .append(" `[Source: MySQL MCP (").append(config.runtime.mysqlHost).append('-').append(config.runtime.mysqlDB)
+                .append(") → SELECT SUM(data_length+index_length) FROM information_schema.tables WHERE table_schema='")
+                .append(config.runtime.mysqlDB).append("']`\n");
+        return new int[]{tableCount};
     }
 
     private StringBuilder handleException(ReviewContext context, SQLException e, long startMs, ServiceConfig config) {
@@ -127,11 +130,11 @@ public class MySQLTableStage {
 
         auditLogService.log(new AuditLogService.AuditLogParam(context.job.jobId, config.serviceId,
                 "MYSQL_TABLE_QUERY", "MySQLTableStage",
-                config.mysqlHost + "/" + config.mysqlDb,
+                config.runtime.mysqlHost + "/" + config.runtime.mysqlDB,
                 "Top 20 tables by storage",
                 null, 500, durationMs, null, e.getMessage(), false));
 
-        logger.error("MySQL table query failed for {}/{}: {}", config.mysqlHost, config.mysqlDb, e.getMessage());
+        logger.error("MySQL table query failed for {}/{}: {}", config.runtime.mysqlHost, config.runtime.mysqlDB, e.getMessage());
         return tableData;
     }
 }

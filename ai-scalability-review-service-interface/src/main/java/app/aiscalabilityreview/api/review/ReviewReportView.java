@@ -1,5 +1,6 @@
 package app.aiscalabilityreview.api.review;
 
+import app.aiscalabilityreview.api.serviceconfig.embedded.AIModelView;
 import core.framework.api.json.Property;
 
 import java.time.ZonedDateTime;
@@ -18,7 +19,7 @@ public class ReviewReportView {
     public String periodLabel;
 
     @Property(name = "ai_model")
-    public String aiModel;
+    public AIModelView aiModel;
 
     @Property(name = "report_markdown")
     public String reportMarkdown;

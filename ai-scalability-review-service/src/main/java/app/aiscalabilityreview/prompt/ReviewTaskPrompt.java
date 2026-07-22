@@ -6,7 +6,10 @@ public class ReviewTaskPrompt {
      * Placeholders: {{SERVICE}}, {{ENV}}, {{NAMESPACE}}, {{MYSQL_HOST}}, {{MYSQL_DB}},
      * {{ATLAS_CLUSTER}}, {{HPA_TYPE}}, {{KAFKA_CONSUMER_GROUPS}}, {{DOMAIN}}
      */
-    public static final String CONTENT = """
+    public static final String CONTENT;
+
+    static {
+        CONTENT = """
         # Scalability Review Task
         
         You are a devops engineer performing a structured scalability review for tier-1
@@ -314,5 +317,6 @@ public class ReviewTaskPrompt {
         ## Review Checklist Reference
         
         See scalability/ai/scalability-review-checkpoint.md
-        """;
+            """;
+    }
 }

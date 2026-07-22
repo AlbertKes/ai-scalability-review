@@ -1,20 +1,17 @@
 package app.aiscalabilityreview.service;
 
-import app.aiscalabilityreview.api.serviceconfig.UpsertServiceConfigRequest;
-import app.aiscalabilityreview.api.serviceconfig.UpsertServiceConfigResponse;
 import app.aiscalabilityreview.domain.ReportComparison;
 import app.aiscalabilityreview.domain.ReviewFeedback;
 import app.aiscalabilityreview.domain.ReviewJob;
 import app.aiscalabilityreview.domain.ReviewReport;
 import app.aiscalabilityreview.domain.ServiceConfig;
 import app.aiscalabilityreview.domain.ValidationResult;
+import app.aiscalabilityreview.domain.embedded.AIModel;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.Sorts;
 import core.framework.inject.Inject;
 import core.framework.mongo.MongoCollection;
 import core.framework.mongo.Query;
-import core.framework.util.Strings;
-import core.framework.web.exception.NotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,8 +28,6 @@ import java.util.UUID;
 public class ReviewService {
     private final Logger logger = LoggerFactory.getLogger(ReviewService.class);
     @Inject
-    MongoCollection<ServiceConfig> serviceConfigCollection;
-    @Inject
     MongoCollection<ReviewJob> reviewJobCollection;
     @Inject
     MongoCollection<ReviewReport> reviewReportCollection;
@@ -42,99 +37,8 @@ public class ReviewService {
     MongoCollection<ReportComparison> reportComparisonCollection;
     @Inject
     MongoCollection<ValidationResult> validationResultCollection;
-
-    public Optional<ServiceConfig> getServiceConfig(String serviceId) {
-        return serviceConfigCollection.get(serviceId);
-    }
-
-    public List<ServiceConfig> listServiceConfigs() {
-        Query query = new Query();
-        return serviceConfigCollection.find(query);
-    }
-
-    public List<ServiceConfig> listEnabledServiceConfigs() {
-        Query query = new Query();
-        query.filter = Filters.eq("enabled", true);
-        return serviceConfigCollection.find(query);
-    }
-
-    public UpsertServiceConfigResponse upsertServiceConfig(String serviceId, UpsertServiceConfigRequest request) {
-        ServiceConfig config = serviceId == null ? new ServiceConfig() : getServiceConfig(serviceId).orElseThrow(
-            () -> new NotFoundException(Strings.format("service config not found, id = {}", serviceId)));
-        if (config.serviceId == null) {
-            config.serviceId = UUID.randomUUID().toString();
-        }
-        config.displayName = request.displayName;
-        config.team = request.team;
-        config.tier = request.tier;
-        config.enabled = request.enabled != null ? request.enabled : true;
-        buildRepositoriesAndReview(request, config);
-        buildRuntime(request, config);
-        var now = ZonedDateTime.now();
-        config.updatedAt = now;
-        if (serviceId == null) {
-            config.createdAt = now;
-            serviceConfigCollection.insert(config);
-        } else {
-            serviceConfigCollection.replace(config);
-        }
-        var response = new UpsertServiceConfigResponse();
-        response.id = config.serviceId;
-        return response;
-    }
-
-    private void buildRuntime(UpsertServiceConfigRequest request, ServiceConfig config) {
-        if (request.runtime != null) {
-            config.environment = request.runtime.environment;
-            config.namespace = request.runtime.namespace;
-            config.hpaType = request.runtime.hpaType;
-            config.kafkaConsumerGroups = request.runtime.kafkaConsumerGroups;
-            config.mysqlHost = request.runtime.mysqlHost;
-            config.mysqlDb = request.runtime.mysqlDb;
-            config.atlasCluster = request.runtime.atlasCluster;
-            config.redisEnabled = request.runtime.redisEnabled;
-            config.datadogDomain = request.runtime.datadogDomain;
-
-            if (request.runtime.deployments != null) {
-                config.deployments = request.runtime.deployments.stream().map(d -> {
-                    ServiceConfig.DeploymentConfig dc = new ServiceConfig.DeploymentConfig();
-                    dc.name = d.name;
-                    dc.type = d.type;
-                    return dc;
-                }).toList();
-            }
-        }
-    }
-
-    private void buildRepositoriesAndReview(UpsertServiceConfigRequest request, ServiceConfig config) {
-        if (request.repositories != null) {
-            if (request.repositories.app != null) {
-                config.repoAppUrl = request.repositories.app.url;
-                config.repoAppBranch = request.repositories.app.branch;
-                config.repoAppServicePath = request.repositories.app.servicePath;
-                config.repoAppIncludePaths = request.repositories.app.includePaths;
-                config.repoAppExcludePaths = request.repositories.app.excludePaths;
-            }
-            if (request.repositories.infra != null) {
-                config.repoInfraUrl = request.repositories.infra.url;
-                config.repoInfraBranch = request.repositories.infra.branch;
-                config.repoInfraServicePath = request.repositories.infra.servicePath;
-            }
-            if (request.repositories.k8sGitops != null) {
-                config.repoK8sGitopsUrl = request.repositories.k8sGitops.url;
-                config.repoK8sGitosBranch = request.repositories.k8sGitops.branch;
-                config.repoK8sGitopsServicePath = request.repositories.k8sGitops.servicePath;
-            }
-        }
-        if (request.review != null) {
-            config.reviewSchedule = request.review.schedule;
-            config.aiModel = request.review.aiModel;
-            config.metricLookbackDays = request.review.metricLookbackDays != null
-                ? request.review.metricLookbackDays : 28;
-            config.confluenceSpaceKey = request.review.confluenceSpaceKey;
-            config.confluenceParentPageTitle = request.review.confluenceParentPageTitle;
-        }
-    }
+    @Inject
+    ServiceConfigService serviceConfigService;
 
     // ---- ReviewJob ----
 
@@ -147,15 +51,14 @@ public class ReviewService {
      * @param note        optional note or label
      * @return the new job ID
      */
-    public String createReviewJob(String serviceId, String triggerType, String model, String note) {
-        ServiceConfig config = getServiceConfig(serviceId)
-            .orElseThrow(() -> new NotFoundException(Strings.format("Service not found, id = {} ", serviceId)));
+    public String createReviewJob(String serviceId, String triggerType, AIModel model, String note) {
+        ServiceConfig config = serviceConfigService.getServiceConfig(serviceId);
 
         ReviewJob job = new ReviewJob();
         job.jobId = UUID.randomUUID().toString();
         job.serviceId = serviceId;
         job.triggerType = triggerType;
-        job.aiModel = model != null ? model : config.aiModel;
+        job.aiModel = model != null ? model : config.reviewConfig.aiModel;
         job.status = "PENDING";
         job.note = note;
         job.startedAt = ZonedDateTime.now();
@@ -268,7 +171,7 @@ public class ReviewService {
         reportComparisonCollection.insert(comparison);
     }
 
-    public String createValidationResult(String reportId, String model, String triggeredBy) {
+    public String createValidationResult(String reportId, AIModel model, String triggeredBy) {
         ReviewReport report = reviewReportCollection.get(reportId).orElse(null);
         if (report == null) {
             throw new IllegalArgumentException("Report not found: " + reportId);

@@ -13,6 +13,7 @@ import app.aiscalabilityreview.job.stage.MySQLTableStage;
 import app.aiscalabilityreview.job.stage.ReportPublishStage;
 import app.aiscalabilityreview.job.stage.ReviewContext;
 import app.aiscalabilityreview.service.ReviewService;
+import app.aiscalabilityreview.service.ServiceConfigService;
 import core.framework.inject.Inject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,28 +27,22 @@ import java.time.ZonedDateTime;
  */
 public class ReviewJobExecutor {
     private final Logger logger = LoggerFactory.getLogger(ReviewJobExecutor.class);
-
     @Inject
     ReviewService reviewService;
-
+    @Inject
+    ServiceConfigService serviceConfigService;
     @Inject
     CodeFetchStage codeFetchStage;
-
     @Inject
     InfraConfigStage infraConfigStage;
-
     @Inject
     AzureMCPStage azureMcpStage;
-
     @Inject
     DatadogMetricsStage datadogMetricsStage;
-
     @Inject
     MySQLTableStage mySQLTableStage;
-
     @Inject
     AIScoringStage aiScoringStage;
-
     @Inject
     ReportPublishStage reportPublishStage;
 
@@ -61,8 +56,7 @@ public class ReviewJobExecutor {
         ReviewJob job = reviewService.getReviewJob(jobId)
                 .orElseThrow(() -> new IllegalArgumentException("ReviewJob not found: " + jobId));
 
-        ServiceConfig config = reviewService.getServiceConfig(job.serviceId)
-                .orElseThrow(() -> new IllegalArgumentException("ServiceConfig not found: " + job.serviceId));
+        ServiceConfig config = serviceConfigService.getServiceConfig(job.serviceId);
 
         ReviewContext context = new ReviewContext();
         context.job = job;

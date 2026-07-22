@@ -139,71 +139,52 @@ public class GitHubService {
             throw new RuntimeException("GitHub tree API error for " + repoUrl + ": " + treeResponse.statusCode);
         }
         GitHubTreeResponse treeResult = JSON.fromJSON(GitHubTreeResponse.class, new String(treeResponse.body, StandardCharsets.UTF_8));
-        StringBuilder sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder(65536);
         int fileCount = 0;
         for (GitHubTreeEntry entry : treeResult.tree) {
             if (!"blob".equals(entry.type)) continue;
             String path = entry.path;
-            // Filter by dirPath prefix
             if (!dirPath.isEmpty() && !path.startsWith(dirPath)) continue;
-            // Skip default excluded directories
-            boolean excluded = false;
-            for (String excDir : DEFAULT_EXCLUDE_DIRS) {
-                if (path.startsWith(excDir + "/") || path.contains("/" + excDir + "/")) {
-                    excluded = true;
-                    break;
-                }
-            }
-            if (excluded) continue;
-            // Apply custom exclude paths
-            if (excludePaths != null) {
-                for (String excPath : excludePaths) {
-                    if (path.startsWith(excPath)) {
-                        excluded = true;
-                        break;
-                    }
-                }
-            }
-            if (excluded) continue;
-
-            // Apply include paths filter
-            if (includePaths != null && !includePaths.isEmpty()) {
-                boolean included = false;
-                for (String incPath : includePaths) {
-                    if (path.startsWith(incPath) || path.endsWith(incPath)) {
-                        included = true;
-                        break;
-                    }
-                }
-                if (!included) continue;
-            } else {
-                // Default: only include known source/config extensions
-                boolean hasKnownExt = false;
-                for (String ext : DEFAULT_INCLUDE_EXTENSIONS) {
-                    if (path.endsWith(ext)) {
-                        hasKnownExt = true;
-                        break;
-                    }
-                }
-                if (!hasKnownExt) continue;
-            }
-
+            if (isPathExcluded(path, excludePaths)) continue;
+            if (!isPathIncluded(path, includePaths)) continue;
             String content = fetchFileContent(repoUrl, branch, path, token);
             if (content == null) continue;
-
-            sb.append("\n\n--- [Source: code → ").append(path).append("] ---\n");
-            sb.append(content);
+            sb.append("\n\n--- [Source: code → ").append(path).append("] ---\n").append(content);
             fileCount++;
-
             // Safety limit: stop at 200 files to avoid huge payloads
             if (fileCount >= 200) {
                 sb.append("\n\n[Truncated: reached 200-file limit]");
                 break;
             }
         }
-
         logger.info("Fetched {} files from {}/{}", fileCount, repoUrl, dirPath);
         return sb.toString();
+    }
+
+    private boolean isPathExcluded(String path, List<String> excludePaths) {
+        for (String excDir : DEFAULT_EXCLUDE_DIRS) {
+            if (path.startsWith(excDir + "/") || path.contains("/" + excDir + "/")) return true;
+        }
+        if (excludePaths != null) {
+            for (String excPath : excludePaths) {
+                if (path.startsWith(excPath)) return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isPathIncluded(String path, List<String> includePaths) {
+        if (includePaths != null && !includePaths.isEmpty()) {
+            for (String incPath : includePaths) {
+                if (path.startsWith(incPath) || path.endsWith(incPath)) return true;
+            }
+            return false;
+        }
+        // Default: only include known source/config extensions
+        for (String ext : DEFAULT_INCLUDE_EXTENSIONS) {
+            if (path.endsWith(ext)) return true;
+        }
+        return false;
     }
 
     /**

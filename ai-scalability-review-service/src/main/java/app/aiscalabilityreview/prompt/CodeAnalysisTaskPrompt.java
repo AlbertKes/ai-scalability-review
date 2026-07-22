@@ -5,7 +5,10 @@ public class CodeAnalysisTaskPrompt {
      * Prompt for code analysis stage (code-analysis-task.md).
      * Placeholder: {{SERVICE}}
      */
-    public static final String CONTENT = """
+    public static final String CONTENT;
+
+    static {
+        CONTENT = """
         # Service Code Analysis — Business Context Extraction
         
         You are an application engineer. Analyze the source code of **{{SERVICE}}** and produce a structured business context \
@@ -54,5 +57,6 @@ public class CodeAnalysisTaskPrompt {
         Where a topic is not applicable (e.g. the service does not support multiple replicas), write "N/A".
         End with a **Key Scalability Signals** section listing the top 3–5 concerns found. If no concerns, \
         write "N/A".
-        """;
+            """;
+    }
 }

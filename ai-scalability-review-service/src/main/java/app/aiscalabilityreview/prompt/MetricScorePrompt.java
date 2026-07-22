@@ -4,7 +4,10 @@ public class MetricScorePrompt {
     /**
      * Metric scoring reference (metric-score.md) — embedded verbatim for reference.
      */
-    public static final String CONTENT = """
+    public static final String CONTENT;
+
+    static {
+        CONTENT = """
         # Metric Scoring Reference
         
         Use this file during **Step 5 — Score Each Review Dimension** in `review-task.md`.
@@ -162,5 +165,6 @@ public class MetricScorePrompt {
         | Error Rates & Stability | HTTP error rate, restarts | Any restart = YELLOW; error rate > 1 % = RED |
         | Resource Saturation | Peak CPU/mem % of limit | Peak CPU > 90 % limit **or** HPA effective trigger (`averageUtilization × request/limit`) ≥ 86 % of limit |
         | Persistence Layer | Connections %, slow queries, replication lag, storage % (Azure MCP), largest table (MySQL MCP) | Connections > 85 % limit **or** replication lag peak > 60 s **or** storage > 75 % **or** any table > 10 GB |
-        """;
+            """;
+    }
 }

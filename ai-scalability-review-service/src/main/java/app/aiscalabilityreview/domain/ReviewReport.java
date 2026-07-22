@@ -1,5 +1,6 @@
 package app.aiscalabilityreview.domain;
 
+import app.aiscalabilityreview.domain.embedded.AIModel;
 import core.framework.mongo.Collection;
 import core.framework.mongo.Field;
 import core.framework.mongo.Id;
@@ -21,7 +22,7 @@ public class ReviewReport {
     public String periodLabel;
 
     @Field(name = "ai_model")
-    public String aiModel;
+    public AIModel aiModel;
 
     @Field(name = "report_markdown")
     public String reportMarkdown;

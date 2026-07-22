@@ -1,6 +1,7 @@
 package app.aiscalabilityreview.service.builder;
 
 import app.aiscalabilityreview.api.review.ReviewJobView;
+import app.aiscalabilityreview.api.serviceconfig.embedded.AIModelView;
 import app.aiscalabilityreview.domain.ReviewJob;
 
 import java.util.ArrayList;
@@ -14,7 +15,7 @@ public class ReviewJobBuilder {
         view.serviceId = job.serviceId;
         view.status = job.status;
         view.currentStage = job.currentStage;
-        view.aiModel = job.aiModel;
+        view.aiModel = AIModelView.valueOf(job.aiModel.name());
         view.triggerType = job.triggerType;
         view.note = job.note;
         view.startedAt = job.startedAt;
@@ -23,7 +24,7 @@ public class ReviewJobBuilder {
         view.errorMessage = job.errorMessage;
 
         if (job.stageStatuses != null && !job.stageStatuses.isEmpty()) {
-            List<ReviewJobView.StageView> stages = new ArrayList<>();
+            List<ReviewJobView.StageView> stages = new ArrayList<>(job.stageStatuses.size());
             for (Map.Entry<String, ReviewJob.StageStatus> entry : job.stageStatuses.entrySet()) {
                 var sv = new ReviewJobView.StageView();
                 sv.name = entry.getKey();

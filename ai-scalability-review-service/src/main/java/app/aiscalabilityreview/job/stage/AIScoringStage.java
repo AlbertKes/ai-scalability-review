@@ -35,6 +35,7 @@ public class AIScoringStage {
     // Score extraction patterns
     private static final Pattern SCORE_PATTERN = Pattern.compile(
             "(?i)###\\s*Dimension\\s+\\d+\\s*[—\\-–]\\s*([^:]+):\\s*(GREEN|YELLOW|RED)");
+    private static final String[] DEFAULT_SCORES = {"UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN"};
     private final Logger logger = LoggerFactory.getLogger(AIScoringStage.class);
     @Inject
     AnthropicService anthropicService;
@@ -102,55 +103,46 @@ public class AIScoringStage {
     private String buildSystemPrompt(ServiceConfig config) {
         return ReviewTaskPrompt.CONTENT
                 .replace("{{SERVICE}}", config.serviceId)
-                .replace("{{ENV}}", nvl(config.environment, "prod"))
-                .replace("{{NAMESPACE}}", nvl(config.namespace, config.serviceId))
-                .replace("{{MYSQL_HOST}}", nvl(config.mysqlHost, "N/A"))
-                .replace("{{MYSQL_DB}}", nvl(config.mysqlDb, "N/A"))
-                .replace("{{ATLAS_CLUSTER}}", nvl(config.atlasCluster, "N/A"))
-                .replace("{{HPA_TYPE}}", nvl(config.hpaType, "HPA"))
+                .replace("{{ENV}}", nvl(config.runtime.environment.name().toLowerCase(Locale.US), "prod"))
+                .replace("{{NAMESPACE}}", nvl(config.runtime.namespace, config.serviceId))
+                .replace("{{MYSQL_HOST}}", nvl(config.runtime.mysqlHost, "N/A"))
+                .replace("{{MYSQL_DB}}", nvl(config.runtime.mysqlDB, "N/A"))
+                .replace("{{ATLAS_CLUSTER}}", nvl(config.runtime.atlasCluster, "N/A"))
+                .replace("{{HPA_TYPE}}", nvl(config.runtime.hpaType.name(), "HPA"))
                 .replace("{{KAFKA_CONSUMER_GROUPS}}", kafkaGroupsOrNA(config))
                 .replace("{{DOMAIN}}", config.serviceId);
     }
 
     private String buildUserPrompt(ReviewContext context) {
         ServiceConfig config = context.config;
-        StringBuilder sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder(65536);
 
-        sb.append("Please perform a complete scalability review for **").append(config.serviceId).append("**.\n\n");
-
-        sb.append("## Code Context (Business Analysis)\n\n");
-        sb.append(nvl(context.codeContextDocument, "Code context: not available")).append("\n\n");
-
-        sb.append("## Infrastructure Configuration\n\n");
-        sb.append(nvl(context.infraSnapshot, "NOT_COLLECTED: no infrastructure configuration available")).append("\n\n");
-
-        sb.append("## Datadog Metrics (28-day window)\n\n");
-        sb.append(nvl(context.datadogMetricsData, "NOT_COLLECTED: no Datadog metrics available")).append("\n\n");
+        sb.append("Please perform a complete scalability review for **").append(config.serviceId)
+                .append("**.\n\n## Code Context (Business Analysis)\n\n")
+                .append(nvl(context.codeContextDocument, "Code context: not available"))
+                .append("\n\n## Infrastructure Configuration\n\n")
+                .append(nvl(context.infraSnapshot, "NOT_COLLECTED: no infrastructure configuration available"))
+                .append("\n\n## Datadog Metrics (28-day window)\n\n")
+                .append(nvl(context.datadogMetricsData, "NOT_COLLECTED: no Datadog metrics available")).append("\n\n");
 
         if (context.mysqlTableData != null && !context.mysqlTableData.isBlank()) {
-            sb.append("## MySQL Table Sizes\n\n");
-            sb.append(context.mysqlTableData).append("\n\n");
+            sb.append("## MySQL Table Sizes\n\n").append(context.mysqlTableData).append("\n\n");
         }
 
         List<ReviewFeedback> pendingFeedback = reviewService.listPendingFeedback(config.serviceId);
         if (!pendingFeedback.isEmpty()) {
-            sb.append("## Previous Review Feedback (from Confluence comments)\n\n");
-            sb.append("The following corrections were submitted by engineers on previous reports. ")
-                    .append("Please address them in this review:\n\n");
+            sb.append("## Previous Review Feedback (from Confluence comments)\n\nThe following corrections were submitted by engineers on previous reports. Please address them in this review:\n\n");
             for (ReviewFeedback fb : pendingFeedback) {
                 sb.append("**[FEEDBACK] ").append(nvl(fb.dimension, "General")).append("**: ")
                         .append(fb.rawText).append("\n\n");
             }
         }
 
-        sb.append("## Report Format\n\n");
-        sb.append("Follow the exact format from report-format.md:\n\n");
-        sb.append(ReportFormatPrompt.CONTENT).append("\n\n");
-
-        sb.append("## Scoring Reference\n\n");
-        sb.append(MetricScorePrompt.CONTENT).append("\n\n");
-
-        sb.append("Now produce the complete scalability review report.\n");
+        sb.append("## Report Format\n\nFollow the exact format from report-format.md:\n\n")
+                .append(ReportFormatPrompt.CONTENT)
+                .append("\n\n## Scoring Reference\n\n")
+                .append(MetricScorePrompt.CONTENT)
+                .append("\n\nNow produce the complete scalability review report.\n");
         return sb.toString();
     }
 
@@ -159,12 +151,12 @@ public class AIScoringStage {
      * Returns array: [traffic, latency, errors, resources, persistence]
      */
     private String[] parseScores(String markdown) {
-        String[] scores = new String[]{"UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN"};
+        String[] scores = DEFAULT_SCORES.clone();
         if (markdown == null) return scores;
 
         Matcher m = SCORE_PATTERN.matcher(markdown);
         int idx = 0;
-        while (m.find() && idx < 5) {
+        while (idx < 5 && m.find()) {
             scores[idx++] = m.group(2).toUpperCase(Locale.US);
         }
         return scores;
@@ -185,10 +177,10 @@ public class AIScoringStage {
     private int countOccurrences(String text, String pattern) {
         if (text == null) return 0;
         int count = 0;
-        int idx = 0;
-        while ((idx = text.indexOf(pattern, idx)) != -1) {
+        int idx = text.indexOf(pattern);
+        while (idx != -1) {
             count++;
-            idx += pattern.length();
+            idx = text.indexOf(pattern, idx + pattern.length());
         }
         return count;
     }
@@ -198,7 +190,7 @@ public class AIScoringStage {
     }
 
     private String kafkaGroupsOrNA(ServiceConfig config) {
-        if (config.kafkaConsumerGroups == null || config.kafkaConsumerGroups.isEmpty()) return "N/A";
-        return String.join(",", config.kafkaConsumerGroups);
+        if (config.runtime.kafkaConsumerGroups == null || config.runtime.kafkaConsumerGroups.isEmpty()) return "N/A";
+        return String.join(",", config.runtime.kafkaConsumerGroups);
     }
 }

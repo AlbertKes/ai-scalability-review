@@ -2,6 +2,7 @@ package app.aiscalabilityreview.job;
 
 import app.aiscalabilityreview.domain.ServiceConfig;
 import app.aiscalabilityreview.service.ReviewService;
+import app.aiscalabilityreview.service.ServiceConfigService;
 import core.framework.async.Executor;
 import core.framework.inject.Inject;
 import core.framework.scheduler.Job;
@@ -19,25 +20,24 @@ import java.util.Locale;
  */
 public class ScheduledScalabilityReviewJob implements Job {
     private final Logger logger = LoggerFactory.getLogger(ScheduledScalabilityReviewJob.class);
-
     @Inject
     ReviewService reviewService;
-
+    @Inject
+    ServiceConfigService serviceConfigService;
     @Inject
     ReviewJobExecutor reviewJobExecutor;
-
     @Inject
     Executor executor;
 
     @Override
     public void execute(JobContext context) throws Exception {
         ZonedDateTime now = ZonedDateTime.now();
-        List<ServiceConfig> enabledConfigs = reviewService.listEnabledServiceConfigs();
+        List<ServiceConfig> enabledConfigs = serviceConfigService.listEnabledServiceConfigs();
 
         logger.info("ScheduledReviewJob triggered at {}; checking {} enabled services", now, enabledConfigs.size());
 
         for (ServiceConfig config : enabledConfigs) {
-            if (shouldRunNow(config.reviewSchedule, now)) {
+            if (shouldRunNow(config.reviewConfig.schedule, now)) {
                 logger.info("Triggering scheduled review for service {}", config.serviceId);
                 try {
                     String jobId = reviewService.createReviewJob(

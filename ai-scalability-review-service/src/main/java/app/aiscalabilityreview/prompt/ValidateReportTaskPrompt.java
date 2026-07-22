@@ -6,7 +6,10 @@ public class ValidateReportTaskPrompt {
      * Placeholders: {{REPORT_FILE}}, {{SERVICE}}, {{ENV}}, {{NAMESPACE}},
      * {{MYSQL_HOST}}, {{MYSQL_DB}}, {{ATLAS_CLUSTER}}, {{KAFKA_CONSUMER_GROUPS}}
      */
-    public static final String CONTENT = """
+    public static final String CONTENT;
+
+    static {
+        CONTENT = """
         # Scalability Review Validation Task
         
         You are a quality-assurance engineer performing an **independent validation** of an existing
@@ -338,5 +341,6 @@ public class ValidateReportTaskPrompt {
         Execute all 7 checks before writing the output. Do not omit any check —
         use STATUS: SKIPPED for checks not applicable to this service.
         Every finding must include a concrete reported value, actual value, and source.
-        """;
+            """;
+    }
 }

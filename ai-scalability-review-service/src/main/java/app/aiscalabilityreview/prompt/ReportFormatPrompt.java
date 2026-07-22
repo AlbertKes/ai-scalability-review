@@ -4,7 +4,10 @@ public class ReportFormatPrompt {
     /**
      * Report format specification (report-format.md) — embedded verbatim for reference.
      */
-    public static final String CONTENT = """
+    public static final String CONTENT;
+
+    static {
+        CONTENT = """
         # Scalability Report Format
         
         Use this file during **Step 7 — Output** in `review-task.md`.
@@ -161,5 +164,6 @@ public class ReportFormatPrompt {
         *Report automatically compiled and validated against Datadog performance history, Azure Resource
         metrics, MySQL performance, and infrastructure configurations.*
         ```
-        """;
+            """;
+    }
 }

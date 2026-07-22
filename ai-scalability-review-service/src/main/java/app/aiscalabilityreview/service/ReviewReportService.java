@@ -11,7 +11,9 @@ import app.aiscalabilityreview.api.review.ValidateReportRequest;
 import app.aiscalabilityreview.api.review.ValidateReportResponse;
 import app.aiscalabilityreview.domain.ReportComparison;
 import app.aiscalabilityreview.domain.ReviewReport;
+import app.aiscalabilityreview.domain.ServiceConfig;
 import app.aiscalabilityreview.domain.ValidationResult;
+import app.aiscalabilityreview.domain.embedded.AIModel;
 import app.aiscalabilityreview.prompt.ComparisonPrompt;
 import app.aiscalabilityreview.prompt.ValidateReportTaskPrompt;
 import app.aiscalabilityreview.prompt.ValidationFormatPrompt;
@@ -35,12 +37,14 @@ public class ReviewReportService {
     private static final double COMPARE_TEMPERATURE = 0.1;
     private static final int VALIDATE_MAX_TOKENS = 8192;
     private static final double VALIDATE_TEMPERATURE = 0.1;
-    private static final String DEFAULT_MODEL = "claude-sonnet-4-6";
+    private static final AIModel DEFAULT_MODEL = AIModel.GEMINI_2_5_PRO;
     private final Logger logger = LoggerFactory.getLogger(ReviewReportService.class);
     @Inject
     Executor executor;
     @Inject
     ReviewService reviewService;
+    @Inject
+    ServiceConfigService serviceConfigService;
     @Inject
     AnthropicService anthropicService;
     @Inject
@@ -145,7 +149,7 @@ public class ReviewReportService {
 
     public ValidateReportResponse validate(String reportId, ValidateReportRequest request) {
         ReviewReport report = reviewService.getReviewReport(reportId).orElseThrow(() -> new NotFoundException("Report not found: " + reportId));
-        String model = request.model != null ? request.model : DEFAULT_MODEL;
+        AIModel model = request.model != null ? AIModel.valueOf(request.model.name()) : DEFAULT_MODEL;
         String validationId = reviewService.createValidationResult(reportId, model, "api");
         final boolean uploadToConfluence = Boolean.TRUE.equals(request.uploadToConfluence);
         executor.submit("validate-" + reportId, () -> {
@@ -157,7 +161,7 @@ public class ReviewReportService {
         return response;
     }
 
-    private void runValidation(String validationId, ReviewReport report, String model, boolean uploadToConfluence) {
+    private void runValidation(String validationId, ReviewReport report, AIModel model, boolean uploadToConfluence) {
         ValidationResult result = reviewService.getValidationResult(validationId).orElse(null);
         if (result == null) return;
 
@@ -203,18 +207,17 @@ public class ReviewReportService {
 
     private void uploadToConfluence(ReviewReport report, AnthropicService.GeneratedContent aiResult, ValidationResult result) {
         try {
-            reviewService.getServiceConfig(report.serviceId).ifPresent(config -> {
-                if (config.confluenceSpaceKey != null) {
-                    String pageTitle = "Validation: " + report.serviceId
-                        + " (" + report.periodLabel + ")";
-                    String pageUrl = confluenceService.createOrUpdatePage(
-                        config.confluenceSpaceKey,
-                        report.confluencePageId,
-                        pageTitle,
-                        aiResult.text());
-                    result.confluencePageUrl = pageUrl;
-                }
-            });
+            ServiceConfig config = serviceConfigService.getServiceConfig(report.serviceId);
+            if (config.reviewConfig.confluenceSpaceKey != null) {
+                String pageTitle = "Validation: " + report.serviceId
+                    + " (" + report.periodLabel + ")";
+                String pageUrl = confluenceService.createOrUpdatePage(
+                    config.reviewConfig.confluenceSpaceKey,
+                    report.confluencePageId,
+                    pageTitle,
+                    aiResult.text());
+                result.confluencePageUrl = pageUrl;
+            }
         } catch (Exception e) {
             logger.warn("Failed to publish validation to Confluence: {}", e.getMessage());
         }

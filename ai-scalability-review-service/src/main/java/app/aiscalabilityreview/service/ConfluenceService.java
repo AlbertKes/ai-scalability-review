@@ -240,10 +240,6 @@ public class ConfluenceService {
         if (markdown == null) return "";
         // Minimal conversion: wrap in a preformatted block via Confluence macro
         // In a real implementation use commonmark or flexmark library
-        String escaped = markdown
-                .replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;");
         return "<ac:structured-macro ac:name=\"code\"><ac:parameter ac:name=\"language\">markdown</ac:parameter>"
                 + "<ac:plain-text-body><![CDATA[" + markdown + "]]></ac:plain-text-body></ac:structured-macro>";
     }

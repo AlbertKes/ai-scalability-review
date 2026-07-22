@@ -6,6 +6,7 @@ import app.aiscalabilityreview.service.AuditLogService;
 import app.aiscalabilityreview.service.ConfluenceService;
 import app.aiscalabilityreview.service.ReviewService;
 import core.framework.inject.Inject;
+import core.framework.util.Strings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,20 +37,20 @@ public class ReportPublishStage {
             return;
         }
 
-        if (config.confluenceSpaceKey == null || config.confluenceSpaceKey.isBlank()) {
+        if (Strings.isBlank(config.reviewConfig.confluenceSpaceKey)) {
             logger.info("No Confluence space configured for service {}; skipping publish", config.serviceId);
             return;
         }
 
         // Find the Confluence parent page ID if not already stored
-        String parentPageId = config.confluenceParentPageId;
-        if ((parentPageId == null || parentPageId.isBlank()) && config.confluenceParentPageTitle != null) {
+        String parentPageId = config.reviewConfig.confluenceParentPageId;
+        if ((parentPageId == null || parentPageId.isBlank()) && config.reviewConfig.confluenceParentPageTitle != null) {
             Optional<String> found = confluenceService.getPageIdByTitle(
-                    config.confluenceSpaceKey, config.confluenceParentPageTitle);
+                    config.reviewConfig.confluenceSpaceKey, config.reviewConfig.confluenceParentPageTitle);
             if (found.isPresent()) {
                 parentPageId = found.get();
                 // Cache it in the service config
-                config.confluenceParentPageId = parentPageId;
+                config.reviewConfig.confluenceParentPageId = parentPageId;
             }
         }
 
@@ -59,7 +60,7 @@ public class ReportPublishStage {
         long startMs = System.currentTimeMillis();
         try {
             String pageUrl = confluenceService.createOrUpdatePage(
-                    config.confluenceSpaceKey, parentPageId, pageTitle, context.reportMarkdown);
+                    config.reviewConfig.confluenceSpaceKey, parentPageId, pageTitle, context.reportMarkdown);
             long durationMs = System.currentTimeMillis() - startMs;
             // Update the report record with Confluence details
             Optional<ReviewReport> reportOpt = reviewService.getReportByJobId(context.job.jobId);
@@ -74,7 +75,7 @@ public class ReportPublishStage {
 
             auditLogService.log(new AuditLogService.AuditLogParam(context.job.jobId, config.serviceId,
                     "CONFLUENCE_PUBLISH", "ReportPublishStage", pageTitle,
-                    "Publish scalability review to Confluence space " + config.confluenceSpaceKey,
+                    "Publish scalability review to Confluence space " + config.reviewConfig.confluenceSpaceKey,
                     null, 200, durationMs, "Published to: " + pageUrl, null, true));
 
             logger.info("Report published to Confluence: {}", pageUrl);

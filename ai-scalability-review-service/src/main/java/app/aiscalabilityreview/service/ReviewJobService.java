@@ -7,6 +7,7 @@ import app.aiscalabilityreview.api.review.ReviewJobView;
 import app.aiscalabilityreview.api.review.TriggerReviewRequest;
 import app.aiscalabilityreview.api.review.TriggerReviewResponse;
 import app.aiscalabilityreview.domain.ReviewJob;
+import app.aiscalabilityreview.domain.embedded.AIModel;
 import app.aiscalabilityreview.job.ReviewJobExecutor;
 import app.aiscalabilityreview.service.builder.ReviewJobBuilder;
 import core.framework.async.Executor;
@@ -23,14 +24,16 @@ public class ReviewJobService {
     @Inject
     ReviewService reviewService;
     @Inject
+    ServiceConfigService serviceConfigService;
+    @Inject
     ReviewJobExecutor reviewJobExecutor;
     @Inject
     Executor executor;
 
     public TriggerReviewResponse trigger(TriggerReviewRequest request) {
-        reviewService.getServiceConfig(request.serviceId).orElseThrow(() -> new
-            NotFoundException(Strings.format("Service not found, id = {} ", request.serviceId)));
-        String jobId = reviewService.createReviewJob(request.serviceId, "MANUAL", request.model, request.note);
+        serviceConfigService.getServiceConfig(request.serviceId);
+        String jobId = reviewService.createReviewJob(request.serviceId, "MANUAL",
+            request.model == null ? null : AIModel.valueOf(request.model.name()), request.note);
         executor.submit("scalability-review-" + request.serviceId, () -> {
             reviewJobExecutor.executeReview(jobId);
         });
