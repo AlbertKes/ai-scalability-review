@@ -12,14 +12,30 @@ import java.util.Locale;
  */
 public class LocalReviewPromptBuilder {
 
+    // --- Output path factory methods ---
+
+    public static String codeContextPath(String outputDir) {
+        return outputDir + "/code-context.md";
+    }
+
+    public static String reviewReportPath(String outputDir, String date) {
+        return outputDir + "/" + date + "-review.md";
+    }
+
+    public static String validationReportPath(String outputDir, String date) {
+        return outputDir + "/" + date + "-validation.md";
+    }
+
     /**
-     * Stage 0 — Code analysis prompt.
+     * Stage 0 — Code analysis prompt. Instructs Gemini to write output to {@code outputPath}.
      */
-    public static String buildCodeAnalysisPrompt(String serviceId, String localAppRepoPath) {
+    public static String buildCodeAnalysisPrompt(String serviceId, String localAppRepoPath, String outputPath) {
         return CodeAnalysisTaskPrompt.CONTENT.replace("{{SERVICE}}", serviceId)
             + "\n\n## Source Code\n\nThe following files are from the **"
             + serviceId + "** application repository. Analyze them per the instructions above.\n\n@"
-            + localAppRepoPath + '\n';
+            + localAppRepoPath + '\n'
+            + "\n## Output\n\nWrite the complete code analysis output to the file `"
+            + outputPath + "` using the file system write tool.\n";
     }
 
     /**
@@ -31,6 +47,10 @@ public class LocalReviewPromptBuilder {
         appendLocalFileReferences(sb, r);
         sb.append(resolveReviewTaskPlaceholders(r));
         appendScoringAndFormatRefs(sb);
+        if (!Strings.isBlank(p.outputPath)) {
+            sb.append("\nWrite the complete review report to file `").append(p.outputPath)
+              .append("` using the file system write tool.\n");
+        }
         return sb.toString();
     }
 
@@ -44,6 +64,10 @@ public class LocalReviewPromptBuilder {
         appendValidationFileRefs(sb, p);
         sb.append("\n\n## Validation Format Reference\n\n").append(ValidationFormatPrompt.CONTENT)
           .append("\n\nNow produce the complete validation report.\n");
+        if (!Strings.isBlank(p.outputPath)) {
+            sb.append("\nWrite the complete validation report to file `").append(p.outputPath)
+              .append("` using the file system write tool.\n");
+        }
         return sb.toString();
     }
 
@@ -138,6 +162,7 @@ public class LocalReviewPromptBuilder {
         public String atlasCluster;
         public String hpaType;
         public String kafkaConsumerGroups;
+        public String outputPath;
     }
 
     public static class ValidationPromptParams {
@@ -150,6 +175,7 @@ public class LocalReviewPromptBuilder {
         public String mysqlDb;
         public String atlasCluster;
         public String kafkaConsumerGroups;
+        public String outputPath;
     }
 
     private static class ResolvedReviewParams {

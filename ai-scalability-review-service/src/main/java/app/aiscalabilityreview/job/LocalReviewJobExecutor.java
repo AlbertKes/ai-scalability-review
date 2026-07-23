@@ -77,10 +77,10 @@ public class LocalReviewJobExecutor {
             return;
         }
 
-        String codeContextPath = outputDir + "/code-context.md";
         String today = ZonedDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
-        String reviewReportPath = outputDir + "/" + today + "-review.md";
-        String validationReportPath = outputDir + "/" + today + "-validation.md";
+        String codeContextPath = LocalReviewPromptBuilder.codeContextPath(outputDir);
+        String reviewReportPath = LocalReviewPromptBuilder.reviewReportPath(outputDir, today);
+        String validationReportPath = LocalReviewPromptBuilder.validationReportPath(outputDir, today);
 
         try {
             runStages(jobId, request, codeContextPath, reviewReportPath, validationReportPath);
@@ -97,25 +97,22 @@ public class LocalReviewJobExecutor {
                            String codeContextPath, String reviewReportPath, String validationReportPath) {
         runCodeAnalysisStage(jobId, request, codeContextPath);
 
-        String[] reviewOutput = {null};
         String outputDir = Path.of(resolveOutputDir(request)).toAbsolutePath().toString();
         runStage(jobId, "STAGE_1_REVIEW", true, () -> {
-            ReviewPromptParams params = buildReviewPromptParams(request, codeContextPath);
+            ReviewPromptParams params = buildReviewPromptParams(request, codeContextPath, reviewReportPath);
             List<String> dirs = List.of(request.localInfraRepoPath, outputDir);
-            String output = geminiCliService.run(LocalReviewPromptBuilder.buildReviewPrompt(params), GEMINI_MODEL, dirs);
-            writeFile(reviewReportPath, output);
-            reviewOutput[0] = output;
+            geminiCliService.run(LocalReviewPromptBuilder.buildReviewPrompt(params), GEMINI_MODEL, dirs);
             logger.info("Stage 1 complete: wrote review report to {}", reviewReportPath);
         });
 
         runStage(jobId, "STAGE_2_VALIDATION", false, () -> {
-            ValidationPromptParams params = buildValidationPromptParams(request, reviewReportPath);
-            String output = geminiCliService.run(LocalReviewPromptBuilder.buildValidationPrompt(params), GEMINI_MODEL, List.of(outputDir, request.localInfraRepoPath));
-            writeFile(validationReportPath, output);
+            ValidationPromptParams params = buildValidationPromptParams(request, reviewReportPath, validationReportPath);
+            geminiCliService.run(LocalReviewPromptBuilder.buildValidationPrompt(params), GEMINI_MODEL, List.of(outputDir, request.localInfraRepoPath));
             logger.info("Stage 2 complete: wrote validation report to {}", validationReportPath);
         });
 
-        ReviewReport report = buildReviewReport(jobId, request, reviewOutput[0], reviewReportPath);
+        String reviewMarkdown = readFileQuietly(reviewReportPath);
+        ReviewReport report = buildReviewReport(jobId, request, reviewMarkdown, reviewReportPath);
         reviewService.saveReport(report);
         reviewService.completeJob(jobId, report.reportId);
         logger.info("Local review job {} completed: reportId={}, outputDir={}",
@@ -135,9 +132,12 @@ public class LocalReviewJobExecutor {
             return;
         }
         runStage(jobId, "STAGE_0_CODE_ANALYSIS", true, () -> {
-            String prompt = LocalReviewPromptBuilder.buildCodeAnalysisPrompt(request.service, request.localAppRepoPath);
-            String output = geminiCliService.run(prompt, GEMINI_MODEL, List.of(request.localAppRepoPath));
-            writeFile(codeContextPath, output);
+            Path absCodeContext = Path.of(codeContextPath).toAbsolutePath();
+            String absCodeContextPath = absCodeContext.toString();
+            Path parent = absCodeContext.getParent();
+            String absOutputDir = parent != null ? parent.toString() : absCodeContext.toString();
+            String prompt = LocalReviewPromptBuilder.buildCodeAnalysisPrompt(request.service, request.localAppRepoPath, absCodeContextPath);
+            geminiCliService.run(prompt, GEMINI_MODEL, List.of(request.localAppRepoPath, absOutputDir));
             logger.info("Stage 0 complete: wrote code-context to {}", codeContextPath);
         });
     }
@@ -170,7 +170,7 @@ public class LocalReviewJobExecutor {
         }
     }
 
-    private ReviewPromptParams buildReviewPromptParams(GenerateLocalReviewRequest request, String codeContextPath) {
+    private ReviewPromptParams buildReviewPromptParams(GenerateLocalReviewRequest request, String codeContextPath, String reviewReportPath) {
         ReviewPromptParams params = new ReviewPromptParams();
         params.serviceId = request.service;
         params.localInfraRepoPath = request.localInfraRepoPath;
@@ -183,10 +183,11 @@ public class LocalReviewJobExecutor {
         params.atlasCluster = request.atlasCluster;
         params.hpaType = request.hpaType;
         params.kafkaConsumerGroups = request.kafkaConsumerGroups;
+        params.outputPath = reviewReportPath;
         return params;
     }
 
-    private ValidationPromptParams buildValidationPromptParams(GenerateLocalReviewRequest request, String reviewReportPath) {
+    private ValidationPromptParams buildValidationPromptParams(GenerateLocalReviewRequest request, String reviewReportPath, String validationReportPath) {
         ValidationPromptParams params = new ValidationPromptParams();
         params.serviceId = request.service;
         params.reviewReportPath = reviewReportPath;
@@ -197,6 +198,7 @@ public class LocalReviewJobExecutor {
         params.atlasCluster = request.atlasCluster;
         params.localInfraRepoPath = request.localInfraRepoPath;
         params.kafkaConsumerGroups = request.kafkaConsumerGroups;
+        params.outputPath = validationReportPath;
         return params;
     }
 
@@ -259,13 +261,13 @@ public class LocalReviewJobExecutor {
         return count;
     }
 
-    private void writeFile(String path, String content) throws IOException {
-        Path file = Path.of(path).toAbsolutePath();
-        Path parent = file.getParent();
-        if (parent != null) {
-            Files.createDirectories(parent);
+    private String readFileQuietly(String path) {
+        try {
+            return Files.readString(Path.of(path).toAbsolutePath());
+        } catch (IOException e) {
+            logger.warn("Could not read report file {}: {}", path, e.getMessage());
+            return "";
         }
-        Files.writeString(file, content);
     }
 
     @FunctionalInterface
