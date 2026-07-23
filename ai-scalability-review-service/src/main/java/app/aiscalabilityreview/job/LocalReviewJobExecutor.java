@@ -20,9 +20,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.Locale;
-import java.util.UUID;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -97,9 +98,11 @@ public class LocalReviewJobExecutor {
         runCodeAnalysisStage(jobId, request, codeContextPath);
 
         String[] reviewOutput = {null};
+        String outputDir = Path.of(resolveOutputDir(request)).toAbsolutePath().toString();
         runStage(jobId, "STAGE_1_REVIEW", true, () -> {
             ReviewPromptParams params = buildReviewPromptParams(request, codeContextPath);
-            String output = geminiCliService.run(LocalReviewPromptBuilder.buildReviewPrompt(params), GEMINI_MODEL);
+            List<String> dirs = List.of(request.localInfraRepoPath, outputDir);
+            String output = geminiCliService.run(LocalReviewPromptBuilder.buildReviewPrompt(params), GEMINI_MODEL, dirs);
             writeFile(reviewReportPath, output);
             reviewOutput[0] = output;
             logger.info("Stage 1 complete: wrote review report to {}", reviewReportPath);
@@ -107,7 +110,7 @@ public class LocalReviewJobExecutor {
 
         runStage(jobId, "STAGE_2_VALIDATION", false, () -> {
             ValidationPromptParams params = buildValidationPromptParams(request, reviewReportPath);
-            String output = geminiCliService.run(LocalReviewPromptBuilder.buildValidationPrompt(params), GEMINI_MODEL);
+            String output = geminiCliService.run(LocalReviewPromptBuilder.buildValidationPrompt(params), GEMINI_MODEL, List.of(outputDir, request.localInfraRepoPath));
             writeFile(validationReportPath, output);
             logger.info("Stage 2 complete: wrote validation report to {}", validationReportPath);
         });
@@ -133,7 +136,7 @@ public class LocalReviewJobExecutor {
         }
         runStage(jobId, "STAGE_0_CODE_ANALYSIS", true, () -> {
             String prompt = LocalReviewPromptBuilder.buildCodeAnalysisPrompt(request.service, request.localAppRepoPath);
-            String output = geminiCliService.run(prompt, GEMINI_MODEL);
+            String output = geminiCliService.run(prompt, GEMINI_MODEL, List.of(request.localAppRepoPath));
             writeFile(codeContextPath, output);
             logger.info("Stage 0 complete: wrote code-context to {}", codeContextPath);
         });
@@ -192,6 +195,7 @@ public class LocalReviewJobExecutor {
         params.mysqlHost = request.mysqlHost;
         params.mysqlDb = request.mysqlDB;
         params.atlasCluster = request.atlasCluster;
+        params.localInfraRepoPath = request.localInfraRepoPath;
         params.kafkaConsumerGroups = request.kafkaConsumerGroups;
         return params;
     }

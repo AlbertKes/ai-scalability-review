@@ -2,7 +2,7 @@ package app.aiscalabilityreview.prompt;
 
 public class ReviewTaskPrompt {
     /**
-     * Prompt for the main scalability review task (review-task.md).
+     * Prompt for the main scalability review task.
      * Placeholders: {{SERVICE}}, {{ENV}}, {{NAMESPACE}}, {{MYSQL_HOST}}, {{MYSQL_DB}},
      * {{ATLAS_CLUSTER}}, {{HPA_TYPE}}, {{KAFKA_CONSUMER_GROUPS}}, {{DOMAIN}}
      */
@@ -31,7 +31,7 @@ public class ReviewTaskPrompt {
         which data source it came from, using one of these labels:
         
         - `[Source: code → <exact file path>]` — value read from a file in a cloned repository
-        - `[Source: context → scalability/ai/context/{{SERVICE}}-code-context.md]` — value from the business context document
+        - `[Source: context → reports/{{SERVICE}}/code-context.md]` — value from the business context document
         - `[Source: Azure MCP → <tool name>(<args>)]` — value retrieved via Azure MCP tool call
         - `[Source: MySQL MCP → <exact SQL query>]` — value retrieved via MySQL MCP tool call
         - `[Source: Datadog MCP → query_metrics("<exact metric query>")]` — value retrieved via Datadog MCP tool call
@@ -82,7 +82,7 @@ public class ReviewTaskPrompt {
         
         ### Step 2 — Load Business Context (if available)
         
-        `[Source: context → scalability/ai/context/{{SERVICE}}-code-context.md]`
+        `[Source: context → reports/{{SERVICE}}/code-context.md]`
         
         If the file below exists, read it and use it to inform your analysis.
         It describes the service's API patterns, DB access, Kafka usage, and resilience config.
@@ -119,11 +119,11 @@ public class ReviewTaskPrompt {
           > If storage auto-grow is ON (confirmed from server properties above), collect **only** this
           > value — do not collect `storage_limit` and do not compute a utilisation percentage.
           > When auto-grow is ON the provisioned limit expands automatically, making the ratio meaningless.
-          > Report the raw GB used and score against the absolute thresholds in `metric-score.md`.
+          > Report the raw GB used and score against the absolute thresholds in `ai-scalability-review-service/src/main/java/app/aiscalabilityreview/prompt/MetricScorePrompt.java`.
         - **Storage limit (GB)** — collect **only** if auto-grow is OFF:
           `[Source: Azure MCP → get_metric(resource={{MYSQL_HOST}}, metric=storage_limit, aggregation=Average)]`
           > When auto-grow is OFF, compute utilisation as `storage_used / storage_limit × 100 %`
-          > and apply the percentage thresholds in `metric-score.md`.
+          > and apply the percentage thresholds in `ai-scalability-review-service/src/main/java/app/aiscalabilityreview/prompt/MetricScorePrompt.java`.
         - **CPU percent**:
           `[Source: Azure MCP → get_metric(resource={{MYSQL_HOST}}, metric=cpu_percent, aggregation=Average)]`
         - **Active connections (current)**:
@@ -251,7 +251,7 @@ public class ReviewTaskPrompt {
           **Important — HPA CPU averageUtilization is relative to CPU request, not CPU limit.**
           Before scoring, compute the effective trigger as a percentage of the CPU limit:
           `effective_trigger_pct_of_limit = averageUtilization × (cpu_request / cpu_limit)`
-          Apply the HPA threshold from `metric-score.md` to this computed value.
+          Apply the HPA threshold from `ai-scalability-review-service/src/main/java/app/aiscalabilityreview/prompt/MetricScorePrompt.java` to this computed value.
           Example: `averageUtilization: 100`, request = `1`, limit = `2` → `100 × 0.5 = 50 %` of limit → GREEN.
           Record both the raw `averageUtilization` and the computed effective % of limit in the report.
         - Are CPU/memory `limits` within 20% of observed peak usage (risk of throttling / OOM)?
@@ -266,7 +266,7 @@ public class ReviewTaskPrompt {
           Source: Datadog MCP `list_monitors` (Step 4).
         - Does the business context (Step 2) reveal batch jobs or scheduled tasks that would
           create predictable traffic spikes not visible in the 28-day average?
-          Source: `[Source: context → {{SERVICE}}-code-context.md]`.
+          Source: `[Source: context → reports/{{SERVICE}}/code-context.md]`.
         - If MySQL table size analysis was performed (Step 5), does the largest table's growth
           trajectory put storage auto-grow or IOPS scaling at risk within +1Q?
         
@@ -274,7 +274,7 @@ public class ReviewTaskPrompt {
         
         ### Step 7 — Score Each Review Dimension
         
-        Use the metric thresholds defined in metric-score.md.
+        Use the metric thresholds defined in ai-scalability-review-service/src/main/java/app/aiscalabilityreview/prompt/MetricScorePrompt.java.
         
         Apply the GREEN / YELLOW / RED thresholds from that file to every collected metric.
         The worst-matching threshold across all metrics in a dimension determines the dimension
@@ -304,7 +304,7 @@ public class ReviewTaskPrompt {
         
         ### Step 9 — Output
         
-        Produce a full scalability report following the exact format defined in report-format.md.
+        Produce a full scalability report following the exact format defined in ai-scalability-review-service/src/main/java/app/aiscalabilityreview/prompt/ReportFormatPrompt.java.
         
         Complete every section and field in the order specified. Use the drift-prevention
         checklist at the end of that file before finalising the report.
@@ -316,7 +316,7 @@ public class ReviewTaskPrompt {
         
         ## Review Checklist Reference
         
-        See scalability/ai/scalability-review-checkpoint.md
+        See ai-scalability-review-service/src/main/resources/doc/scalability-review-checkpoint.md
             """;
     }
 }

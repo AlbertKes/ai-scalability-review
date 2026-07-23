@@ -2,7 +2,7 @@ package app.aiscalabilityreview.prompt;
 
 public class CodeAnalysisTaskPrompt {
     /**
-     * Prompt for code analysis stage (code-analysis-task.md).
+     * Prompt for code analysis stage.
      * Placeholder: {{SERVICE}}
      */
     public static final String CONTENT;

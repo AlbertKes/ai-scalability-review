@@ -2,16 +2,19 @@ package app.aiscalabilityreview.prompt;
 
 public class ValidationFormatPrompt {
     /**
-     * Validation report format specification (validation-format.md).
+     * Validation report format specification.
      */
-    public static final String CONTENT = """
+    public static final String CONTENT;
+
+    static {
+        CONTENT = """
         # Validation Report Format
         
         This file defines the mandatory output format for scalability review validation reports.
         
-        **File naming**: `reports/<service>/<service>-validation-<report-YYYY-MM-DD>-run-<run-YYYY-MM-DD>.md`
+        **File naming**: `reports/<service>/<YYYY-MM-DD>-validation.md`
         
-        Example: `reports/wonder-cart-service/wonder-cart-service-validation-2026-07-08-run-2026-07-10.md`
+        Example: `reports/wonder-cart-service/2026-07-10-validation.md`
         
         ---
         
@@ -167,5 +170,6 @@ public class ValidationFormatPrompt {
         - [ ] Critical Issues section lists every FAIL; Warnings section lists every WARNING
         - [ ] SKIPPED findings have a clear reason stated
         - [ ] Temporal context is noted when report is >30 days old (affects Check 2 and Check 6)
-        """;
+            """;
+    }
 }

@@ -7,34 +7,48 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 
 /**
  * Runs the local Gemini CLI as a subprocess with a given prompt.
  * The prompt is written to a temporary file and passed via "-p @promptFile" so the Gemini CLI
  * expands all @file references (source repos, infra configs) before sending to the model.
+ * Runs from a neutral temp directory to prevent Gemini from treating the current project
+ * as its workspace. Each invocation uses a unique session ID to avoid inheriting prior context.
+ * Callers must pass includeDirs to whitelist any paths the prompt references via @file.
  * MCP servers (Datadog, Azure, MySQL) must be pre-configured in the local Gemini CLI setup.
  */
 public class GeminiCliService {
-    private static final String DEFAULT_MODEL = "gemini-2.5-pro";
     private static final int TIMEOUT_MINUTES = 30;
     private final Logger logger = LoggerFactory.getLogger(GeminiCliService.class);
 
-    public String run(String prompt) throws IOException, InterruptedException {
-        return run(prompt, DEFAULT_MODEL);
-    }
-
-    public String run(String prompt, String model) throws IOException, InterruptedException {
-        Path promptFile = Files.createTempFile("gemini-prompt-", ".md");
-        Path stderrFile = Files.createTempFile("gemini-stderr-", ".log");
+    public String run(String prompt, String model, List<String> includeDirs) throws IOException, InterruptedException {
+        Path workDir = Files.createTempDirectory("gemini-workdir-");
+        Path promptFile = workDir.resolve("prompt.md");
+        Path stderrFile = workDir.resolve("stderr.log");
         try {
             Files.writeString(promptFile, prompt);
-            logger.info("Running Gemini CLI: model={}, promptLength={}", model, prompt.length());
+            logger.info("Running Gemini CLI: model={}, promptLength={}, includeDirs={}", model, prompt.length(), includeDirs);
 
-            // Pass prompt via "-p @file" so the CLI expands all @file references in the prompt.
-            // stdin redirect does not trigger @file expansion in non-interactive mode.
-            ProcessBuilder pb = new ProcessBuilder(
-                "gemini", "--model", model, "--yolo", "-p", "@" + promptFile.toAbsolutePath());
+            List<String> baseArgs = List.of(
+                "gemini", "--model", model, "--yolo", "--skip-trust",
+                "--output-format", "text",
+                "--session-id", UUID.randomUUID().toString());
+            List<String> dirArgs = includeDirs.stream()
+                .flatMap(dir -> Stream.of("--include-directories", dir))
+                .toList();
+            List<String> promptArg = List.of("-p", "@" + promptFile.toAbsolutePath());
+            List<String> command = new ArrayList<>(baseArgs.size() + dirArgs.size() + promptArg.size());
+            command.addAll(baseArgs);
+            command.addAll(dirArgs);
+            command.addAll(promptArg);
+
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.directory(workDir.toFile());
             pb.redirectError(stderrFile.toFile());
 
             Process process = pb.start();
@@ -59,6 +73,7 @@ public class GeminiCliService {
         } finally {
             deleteQuietly(promptFile);
             deleteQuietly(stderrFile);
+            deleteQuietly(workDir);
         }
     }
 

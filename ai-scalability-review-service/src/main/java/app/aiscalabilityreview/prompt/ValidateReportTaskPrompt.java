@@ -2,7 +2,7 @@ package app.aiscalabilityreview.prompt;
 
 public class ValidateReportTaskPrompt {
     /**
-     * Validation task prompt (validate-report-task.md).
+     * Validation task prompt.
      * Placeholders: {{REPORT_FILE}}, {{SERVICE}}, {{ENV}}, {{NAMESPACE}},
      * {{MYSQL_HOST}}, {{MYSQL_DB}}, {{ATLAS_CLUSTER}}, {{KAFKA_CONSUMER_GROUPS}}
      */
@@ -151,13 +151,13 @@ public class ValidateReportTaskPrompt {
         ## Check 4 — Scoring Accuracy
         
         For each of the 5 fixed scoring dimensions, verify that the stated score (GREEN / YELLOW / RED)
-        is correct given the metric values cited in the rationale and the thresholds in metric-score.md.
+        is correct given the metric values cited in the rationale and the thresholds in ai-scalability-review-service/src/main/java/app/aiscalabilityreview/prompt/MetricScorePrompt.java.
         
         **Procedure for each dimension**:
         1. Parse the scoring rationale — identify every specific metric value cited with its unit.
-        2. For each cited metric value, find the matching row in metric-score.md.
+        2. For each cited metric value, find the matching row in ai-scalability-review-service/src/main/java/app/aiscalabilityreview/prompt/MetricScorePrompt.java.
         3. Determine what color (GREEN / YELLOW / RED) that value individually produces.
-        4. Apply the aggregation rule from metric-score.md:
+        4. Apply the aggregation rule from ai-scalability-review-service/src/main/java/app/aiscalabilityreview/prompt/MetricScorePrompt.java:
            - Any RED metric → dimension is RED
            - No RED but ≥1 YELLOW metric → dimension is YELLOW
            - All GREEN → dimension is GREEN
@@ -180,7 +180,7 @@ public class ValidateReportTaskPrompt {
           connection pool %, query targeting ratio
         
         If the rationale does not cite a concrete metric value for a dimension, flag the dimension
-        as WARNING — "rationale lacks specific metric values required by report-format.md".
+        as WARNING — "rationale lacks specific metric values required by ai-scalability-review-service/src/main/java/app/aiscalabilityreview/prompt/ReportFormatPrompt.java".
         
         ---
         
@@ -248,7 +248,7 @@ public class ValidateReportTaskPrompt {
         
         ## Check 7 — Format & Attribution Completeness
         
-        Verify the report structure against the mandatory format in report-format.md.
+        Verify the report structure against the mandatory format in ai-scalability-review-service/src/main/java/app/aiscalabilityreview/prompt/ReportFormatPrompt.java.
         No external queries needed — read {{REPORT_FILE}} only.
         
         ### 7a — Section presence and order
@@ -336,7 +336,7 @@ public class ValidateReportTaskPrompt {
         
         ## Output
         
-        Produce a complete validation report following the format defined in validation-format.md.
+        Produce a complete validation report following the format defined in ai-scalability-review-service/src/main/java/app/aiscalabilityreview/prompt/ValidationFormatPrompt.java.
         
         Execute all 7 checks before writing the output. Do not omit any check —
         use STATUS: SKIPPED for checks not applicable to this service.

@@ -2,7 +2,7 @@ package app.aiscalabilityreview.prompt;
 
 public class ReportFormatPrompt {
     /**
-     * Report format specification (report-format.md) — embedded verbatim for reference.
+     * Report format specification — embedded verbatim for reference.
      */
     public static final String CONTENT;
 
@@ -10,7 +10,7 @@ public class ReportFormatPrompt {
         CONTENT = """
         # Scalability Report Format
         
-        Use this file during **Step 7 — Output** in `review-task.md`.
+        Use this file during **Step 7 — Output** in `ai-scalability-review-service/src/main/java/app/aiscalabilityreview/prompt/ReviewTaskPrompt.java`.
         Fill every section and field exactly as specified. Do **not** add, remove, or rename
         sections. Do **not** invent metrics; write `NOT_COLLECTED: <reason>` for any metric
         that could not be retrieved. Following this format ensures that repeated reviews of the
@@ -42,7 +42,7 @@ public class ReportFormatPrompt {
         ## File Naming Convention
         
         ```
-        reports/<service>-<YYYY-MM-DD>.md
+        reports/{{SERVICE}}/<YYYY-MM-DD>-review.md
         ```
         
         ---
@@ -129,13 +129,13 @@ public class ReportFormatPrompt {
         - If a service has multiple deployments (e.g. consumer variant, kafka-consumer variant),
           add one sub-table per deployment rather than merging them.
         - Use exact values from Terraform / Kubernetes manifests or Azure MCP (live state). Do not round.
-        - If MySQL table size analysis was performed (Step 5 of review-task.md), add a MySQL sub-table.
+        - If MySQL table size analysis was performed (Step 5 of ai-scalability-review-service/src/main/java/app/aiscalabilityreview/prompt/ReviewTaskPrompt.java), add a MySQL sub-table.
         
         ---
         
         ## 4. Performance Metrics (Last 28 Days)
         
-        See report-format.md for the full metric template structure.
+        See ai-scalability-review-service/src/main/java/app/aiscalabilityreview/prompt/ReportFormatPrompt.java for the full metric template structure.
         
         ---
         
