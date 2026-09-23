@@ -55,5 +55,26 @@ public class ReviewJobView {
 
         @Property(name = "error")
         public String error;
+
+        @Property(name = "model")
+        public String model;
+
+        @Property(name = "input_tokens")
+        public Long inputTokens;
+
+        @Property(name = "output_tokens")
+        public Long outputTokens;
+
+        @Property(name = "cached_tokens")
+        public Long cachedTokens;
+
+        @Property(name = "total_tokens")
+        public Long totalTokens;
+
+        @Property(name = "tool_calls")
+        public Integer toolCalls;
+
+        @Property(name = "mcp_tool_calls")
+        public Integer mcpToolCalls;
     }
 }

@@ -50,7 +50,7 @@ public class AuditLogService {
      * @param serviceId         service being reviewed
      * @param eventType         event type, e.g. "ANTHROPIC_API_CALL", "DATADOG_METRICS_QUERY"
      * @param actor             caller identifier, e.g. "AIScoringStage"
-     * @param target            target system or resource, e.g. "anthropic/claude-sonnet-4-6"
+     * @param target            target system or resource, e.g. "anthropic/claude-opus-5"
      * @param requestSummary    brief summary of the request
      * @param requestTokenCount token count of the request (for AI calls), or null
      * @param statusCode        HTTP or logical status code of the response

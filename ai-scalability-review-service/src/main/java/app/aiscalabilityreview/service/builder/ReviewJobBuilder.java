@@ -33,6 +33,13 @@ public class ReviewJobBuilder {
                     sv.status = ss.status;
                     sv.durationMs = ss.durationMs;
                     sv.error = ss.errorMessage;
+                    sv.model = ss.model;
+                    sv.inputTokens = ss.inputTokens;
+                    sv.outputTokens = ss.outputTokens;
+                    sv.cachedTokens = ss.cachedTokens;
+                    sv.totalTokens = ss.totalTokens;
+                    sv.toolCalls = ss.toolCalls;
+                    sv.mcpToolCalls = ss.mcpToolCalls;
                 }
                 stages.add(sv);
             }

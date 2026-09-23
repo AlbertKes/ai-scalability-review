@@ -10,10 +10,9 @@ public class MetricScorePrompt {
         CONTENT = """
         # Metric Scoring Reference
         
-        Use this file during **Step 5 — Score Each Review Dimension** in `ai-scalability-review-service/src/main/java/app/aiscalabilityreview/prompt/ReviewTaskPrompt.java`.
-        For every collectible metric listed below, apply the corresponding GREEN / YELLOW / RED
-        threshold. Assign the worst-matching threshold across all metrics within a dimension to
-        determine that dimension's overall score.
+        Use this reference when scoring the review dimensions. For every collectible metric listed
+        below, apply the corresponding GREEN / YELLOW / RED threshold. Assign the worst-matching
+        threshold across all metrics within a dimension to determine that dimension's overall score.
         
         ---
         

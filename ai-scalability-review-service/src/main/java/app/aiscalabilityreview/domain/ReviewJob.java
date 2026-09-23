@@ -71,6 +71,32 @@ public class ReviewJob {
 
         @Field(name = "output_summary")
         public String outputSummary;
+
+        // ---- cost / latency instrumentation (AD-6383) ----
+
+        @Field(name = "model")
+        public String model;
+
+        @Field(name = "input_tokens")
+        public Long inputTokens;
+
+        @Field(name = "output_tokens")
+        public Long outputTokens;
+
+        @Field(name = "cached_tokens")
+        public Long cachedTokens;
+
+        @Field(name = "total_tokens")
+        public Long totalTokens;
+
+        @Field(name = "api_requests")
+        public Integer apiRequests;
+
+        @Field(name = "tool_calls")
+        public Integer toolCalls;
+
+        @Field(name = "mcp_tool_calls")
+        public Integer mcpToolCalls;
     }
 
     public static class DeploymentConfig {

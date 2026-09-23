@@ -101,7 +101,7 @@ public class UpsertServiceConfigRequest {
 
         @NotNull
         @Property(name = "ai_model")
-        public AIModelView aiModel = AIModelView.GEMINI_2_5_PRO;
+        public AIModelView aiModel = AIModelView.CLAUDE_OPUS_5;
 
         @NotNull
         @Property(name = "metric_lookback_days")

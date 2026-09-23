@@ -12,7 +12,7 @@ public class TriggerReviewRequest {
     public String serviceId;
 
     @Property(name = "model")
-    public AIModelView model;  // optional override, e.g. "claude-sonnet-4-6"
+    public AIModelView model;  // optional override, e.g. "claude-opus-5"
 
     @Property(name = "note")
     public String note;  // optional label for manual triggers

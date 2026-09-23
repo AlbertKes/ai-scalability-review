@@ -75,15 +75,16 @@ public class ReviewService {
      *
      * @param serviceId   service being reviewed
      * @param triggeredBy identifier of who triggered the run (e.g. serviceId or "api")
+     * @param model       model the run's synthesis stage will use
      * @return the new job ID
      */
-    public String createLocalReviewJob(String serviceId, String triggeredBy) {
+    public String createLocalReviewJob(String serviceId, String triggeredBy, AIModel model) {
         ReviewJob job = new ReviewJob();
         job.jobId = UUID.randomUUID().toString();
         job.serviceId = serviceId;
         job.triggerType = "MANUAL";
         job.triggeredBy = triggeredBy;
-        job.aiModel = AIModel.GEMINI_2_5_PRO;
+        job.aiModel = model;
         job.status = "PENDING";
         job.startedAt = ZonedDateTime.now();
         job.stageStatuses = new LinkedHashMap<>();

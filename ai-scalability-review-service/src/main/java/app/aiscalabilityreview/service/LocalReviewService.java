@@ -23,7 +23,8 @@ public class LocalReviewService {
     public GenerateLocalReviewResponse generate(GenerateLocalReviewRequest request) {
         validateLocalPaths(request);
 
-        String jobId = reviewService.createLocalReviewJob(request.service, request.operator);
+        String synthesisModel = GeminiModels.orDefault(request.synthesisModel, GeminiModels.SYNTHESIS_DEFAULT);
+        String jobId = reviewService.createLocalReviewJob(request.service, request.operator, GeminiModels.toAIModel(synthesisModel));
         String outputDir = LocalReviewJobExecutor.resolveOutputDir(request);
 
         localReviewJobExecutor.registerRequest(jobId, request);
@@ -31,7 +32,8 @@ public class LocalReviewService {
             localReviewJobExecutor.executeLocalReview(jobId);
         });
 
-        logger.info("Triggered local review job {} for service {}, outputDir={}", jobId, request.service, outputDir);
+        logger.info("Triggered local review job {} for service {}, outputDir={}, synthesisModel={}",
+            jobId, request.service, outputDir, synthesisModel);
 
         GenerateLocalReviewResponse response = new GenerateLocalReviewResponse();
         response.jobId = jobId;

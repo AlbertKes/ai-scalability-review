@@ -37,7 +37,7 @@ public class ReviewReportService {
     private static final double COMPARE_TEMPERATURE = 0.1;
     private static final int VALIDATE_MAX_TOKENS = 8192;
     private static final double VALIDATE_TEMPERATURE = 0.1;
-    private static final AIModel DEFAULT_MODEL = AIModel.GEMINI_2_5_PRO;
+    private static final AIModel DEFAULT_MODEL = AIModel.CLAUDE_OPUS_5;
     private final Logger logger = LoggerFactory.getLogger(ReviewReportService.class);
     @Inject
     Executor executor;

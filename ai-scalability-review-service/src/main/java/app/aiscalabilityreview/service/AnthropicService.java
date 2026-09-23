@@ -82,8 +82,8 @@ public class AnthropicService {
         int inputTokens = anthropicResponse.usage != null ? anthropicResponse.usage.inputTokens : 0;
         int outputTokens = anthropicResponse.usage != null ? anthropicResponse.usage.outputTokens : 0;
 
-        // Rough cost estimate: claude-sonnet pricing ~$3/$15 per 1M tokens input/output
-        double estimatedCostUsd = (inputTokens * 3.0 + outputTokens * 15.0) / 1_000_000.0;
+        // Rough cost estimate: claude-opus-5 pricing $5/$25 per 1M tokens input/output
+        double estimatedCostUsd = (inputTokens * 5.0 + outputTokens * 25.0) / 1_000_000.0;
 
         logger.info("Anthropic API call completed: model={}, inputTokens={}, outputTokens={}, durationMs={}, estimatedCostUsd={}",
             aiModelString(aiModel), inputTokens, outputTokens, durationMs, estimatedCostUsd);
@@ -94,8 +94,9 @@ public class AnthropicService {
     private String aiModelString(AIModel aiModel) {
         if (aiModel == null) return null;
         return switch (aiModel) {
-            case CLAUDE_SONNET_4_6 -> "claude-sonnet-4-6";
-            case GEMINI_2_5_PRO -> "gemini-2-5-pro";
+            case CLAUDE_OPUS_5 -> "claude-opus-5";
+            case GEMINI_3_5_FLASH -> "gemini-3.5-flash";
+            case GEMINI_3_1_FLASH_LITE -> "gemini-3.1-flash-lite";
         };
     }
 

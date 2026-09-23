@@ -3,10 +3,10 @@ package app.aiscalabilityreview.domain.embedded;
 import core.framework.mongo.MongoEnumValue;
 
 public enum AIModel {
-    @MongoEnumValue("CLAUDE_SONNET_4_6")
-    CLAUDE_SONNET_4_6,
-    @MongoEnumValue("GEMINI_2_5_PRO")
-    GEMINI_2_5_PRO
-
-
+    @MongoEnumValue("CLAUDE_OPUS_5")
+    CLAUDE_OPUS_5,
+    @MongoEnumValue("GEMINI_3_5_FLASH")
+    GEMINI_3_5_FLASH,
+    @MongoEnumValue("GEMINI_3_1_FLASH_LITE")
+    GEMINI_3_1_FLASH_LITE
 }

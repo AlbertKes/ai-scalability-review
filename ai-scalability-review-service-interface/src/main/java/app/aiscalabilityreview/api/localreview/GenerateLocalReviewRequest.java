@@ -4,6 +4,8 @@ import core.framework.api.json.Property;
 import core.framework.api.validate.NotBlank;
 import core.framework.api.validate.NotNull;
 
+import java.util.List;
+
 public class GenerateLocalReviewRequest {
     @NotNull
     @NotBlank
@@ -59,6 +61,27 @@ public class GenerateLocalReviewRequest {
     @NotNull
     @Property(name = "skip_code_analysis")
     public Boolean skipCodeAnalysis = Boolean.FALSE;  // skip Stage 0 code analysis
+
+    @NotNull
+    @Property(name = "skip_validation")
+    public Boolean skipValidation = Boolean.FALSE;  // skip the final validation stage (halves the MCP round-trips of a run)
+
+    @Property(name = "app_code_paths")
+    public List<String> appCodePaths;  // repo-relative sub paths to analyze, e.g. ["backend/wonder-cart-service"]; whole repo when null
+
+    // ---- per stage model overrides, see GeminiModels for the defaults (AD-6383) ----
+
+    @Property(name = "code_analysis_model")
+    public String codeAnalysisModel;
+
+    @Property(name = "metric_collection_model")
+    public String metricCollectionModel;
+
+    @Property(name = "synthesis_model")
+    public String synthesisModel;
+
+    @Property(name = "validation_model")
+    public String validationModel;
 
     @Property(name = "output_base_dir")
     public String outputBaseDir;  // base directory for output files; defaults to ./reports relative to working dir

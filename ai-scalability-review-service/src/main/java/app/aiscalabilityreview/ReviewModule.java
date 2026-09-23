@@ -21,6 +21,7 @@ import app.aiscalabilityreview.service.ConfluenceService;
 import app.aiscalabilityreview.service.DatadogService;
 import app.aiscalabilityreview.service.GeminiCliService;
 import app.aiscalabilityreview.service.GitHubService;
+import app.aiscalabilityreview.service.InfraContextService;
 import app.aiscalabilityreview.service.LocalReviewService;
 import app.aiscalabilityreview.service.ReviewJobService;
 import app.aiscalabilityreview.service.ReviewReportService;
@@ -53,6 +54,7 @@ public class ReviewModule extends Module {
         bind(AuditLogService.class);
         bind(ReviewReportService.class);
         bind(GeminiCliService.class);
+        bind(InfraContextService.class);
     }
 
     private void bindStageExecutors() {
