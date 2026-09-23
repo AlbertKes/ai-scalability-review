@@ -2,6 +2,7 @@ package app.aiscalabilityreview.service;
 
 import core.framework.api.json.Property;
 import core.framework.json.JSON;
+import core.framework.util.Strings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,6 +36,9 @@ import java.util.stream.Stream;
  *
  * <p>The CLI is invoked with {@code --output-format json} so each run reports its own token usage
  * and tool-call counts; those are returned in {@link GeminiRunResult} for per-stage accounting.
+ *
+ * <p>Authentication is pinned to Vertex AI with Application Default Credentials rather than
+ * inherited from the shell — see {@link #pinVertexAuth}.
  */
 public class GeminiCliService {
     /**
@@ -46,7 +50,31 @@ public class GeminiCliService {
     private static final String MCP_TOOL_NAME_PREFIX = "mcp_";
     private static final int ERROR_OUTPUT_LIMIT = 4000;
 
+    private static final String GOOGLE_API_KEY = "GOOGLE_API_KEY";
+    private static final String GEMINI_API_KEY = "GEMINI_API_KEY";
+    private static final String USE_VERTEX_AI = "GOOGLE_GENAI_USE_VERTEXAI";
+    private static final String CLOUD_PROJECT = "GOOGLE_CLOUD_PROJECT";
+    private static final String CLOUD_PROJECT_ID = "GOOGLE_CLOUD_PROJECT_ID";
+    private static final String CLOUD_LOCATION = "GOOGLE_CLOUD_LOCATION";
+
     private final Logger logger = LoggerFactory.getLogger(GeminiCliService.class);
+    private final String cloudProject;
+    private final String cloudLocation;
+
+    /**
+     * @param cloudProject  {@code app.gemini.cloud.project} — the Google Cloud project hosting Vertex AI
+     * @param cloudLocation {@code app.gemini.cloud.location} — the Vertex AI region, e.g. {@code global}
+     */
+    public GeminiCliService(String cloudProject, String cloudLocation) {
+        if (Strings.isBlank(cloudProject)) {
+            throw new IllegalArgumentException("app.gemini.cloud.project must be configured with the Google Cloud project hosting Vertex AI");
+        }
+        if (Strings.isBlank(cloudLocation)) {
+            throw new IllegalArgumentException("app.gemini.cloud.location must be configured, e.g. global");
+        }
+        this.cloudProject = cloudProject;
+        this.cloudLocation = cloudLocation;
+    }
 
     public GeminiRunResult run(GeminiRunRequest request) throws IOException, InterruptedException {
         Path workDir = Files.createTempDirectory("gemini-workdir-");
@@ -60,6 +88,7 @@ public class GeminiCliService {
             ProcessBuilder pb = new ProcessBuilder(command(request, promptFile));
             pb.directory(workDir.toFile());
             pb.redirectError(stderrFile.toFile());
+            pinVertexAuth(pb.environment());
 
             long startMs = System.currentTimeMillis();
             Process process = pb.start();
@@ -88,6 +117,42 @@ public class GeminiCliService {
             deleteQuietly(stderrFile);
             deleteQuietly(workDir);
         }
+    }
+
+    /**
+     * Pins the subprocess onto Vertex AI with Application Default Credentials.
+     *
+     * <p>The CLI resolves credentials with the API key winning over ADC: when {@code GOOGLE_API_KEY}
+     * or {@code GEMINI_API_KEY} is set it switches to Vertex express mode, sends the key as
+     * {@code x-goog-api-key}, and never builds a {@code GoogleAuth} client. The request is then
+     * billed to — and authorized against — whatever project owns that key, not the project this
+     * service is configured for, which surfaces as an opaque {@code 403 API_KEY_SERVICE_BLOCKED}.
+     * A key exported from a developer's shell profile is inherited by this process and silently
+     * takes over the run, so both variables are removed from the child environment.
+     *
+     * <p>The project and location come from configuration rather than the inherited environment, so
+     * a run always targets the configured project. Both are set explicitly because the CLI only
+     * takes the Vertex path when it has <em>both</em>; with the location missing it falls through to
+     * the public Gemini API with no credentials at all. {@code GOOGLE_CLOUD_PROJECT_ID} is cleared
+     * so an inherited alias cannot disagree with the configured project.
+     *
+     * @param env the child process environment, pre-populated by {@link ProcessBuilder} with a copy
+     *            of this process's environment
+     */
+    void pinVertexAuth(Map<String, String> env) {
+        String removedKey = env.remove(GOOGLE_API_KEY) != null ? GOOGLE_API_KEY : null;
+        if (env.remove(GEMINI_API_KEY) != null) {
+            removedKey = removedKey == null ? GEMINI_API_KEY : removedKey + " and " + GEMINI_API_KEY;
+        }
+        if (removedKey != null) {
+            logger.info("Ignoring {} from the environment; the local review authenticates to Vertex AI with Application Default Credentials", removedKey);
+        }
+
+        env.remove(CLOUD_PROJECT_ID);
+        env.put(CLOUD_PROJECT, cloudProject);
+        env.put(CLOUD_LOCATION, cloudLocation);
+        env.put(USE_VERTEX_AI, "true");
+        logger.info("Gemini CLI auth: Vertex AI via Application Default Credentials, project={}, location={}", cloudProject, cloudLocation);
     }
 
     private List<String> command(GeminiRunRequest request, Path promptFile) {

@@ -63,6 +63,30 @@ the names `datadog`, `azure`, and `<mysql-host-short-name>-<mysql-db>` (e.g.
 `rfprodv2-flexible-wonder-db-wonder_cart`). Each stage is started with only the servers it needs, so
 a server configured under a different name is simply not available to the run.
 
+Authentication is **pinned to Vertex AI with Application Default Credentials** and is not inherited
+from the shell. `GOOGLE_API_KEY` / `GEMINI_API_KEY` are stripped from the CLI subprocess
+environment: the CLI gives an API key precedence over ADC and switches to Vertex express mode, which
+authorizes against whatever project owns the key rather than the one configured here — a key left in
+a shell profile would silently take over the run and fail with `403 API_KEY_SERVICE_BLOCKED`.
+
+The target project and region come from `app.properties`, not from the shell:
+
+```properties
+app.gemini.cloud.location=global
+app.gemini.cloud.project=wonder-sandbox
+```
+
+Either can be overridden without a rebuild, by environment variable
+(`APP_GEMINI_CLOUD_PROJECT`, `APP_GEMINI_CLOUD_LOCATION`) or system property
+(`-Dapp.gemini.cloud.project=...`). Both are required — the app refuses to start without them,
+because with no location the CLI silently falls off the Vertex path onto the public Gemini API.
+
+The only thing left to set up locally is the credential itself:
+
+```bash
+gcloud auth application-default login
+```
+
 ### Cost and latency budget
 
 Target for one service review, enforced as a warning rather than a hard failure (see

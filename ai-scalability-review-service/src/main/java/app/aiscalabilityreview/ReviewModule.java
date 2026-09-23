@@ -53,7 +53,7 @@ public class ReviewModule extends Module {
         bind(ConfluenceService.class);
         bind(AuditLogService.class);
         bind(ReviewReportService.class);
-        bind(GeminiCliService.class);
+        bind(new GeminiCliService(requiredProperty("app.gemini.cloud.project"), requiredProperty("app.gemini.cloud.location")));
         bind(InfraContextService.class);
     }
 
