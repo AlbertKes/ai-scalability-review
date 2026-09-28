@@ -1,298 +1,292 @@
-# Business Context & Scalability Analysis — wonder-cart-service
+# Service Code Analysis — wonder-cart-service
 
-This document provides a highly detailed, fact-based business context and technical scalability analysis of the `wonder-cart-service` (including `wonder-cart-service-interface` and `wonder-cart-service-db-migration`) based on a static review of the codebase.
+This document provides a factual and detailed technical summary of the `wonder-cart-service`, including its interface and database access patterns, extracted directly from the source code for the purpose of a scalability review.
 
 ---
 
 ## 1. API Surface
 
-The service exposes a comprehensive REST API and message consumption model across multiple user-facing clients (App, Web, POP) and administrative clients (Back Office).
+The service exposes REST endpoints for managing shopping carts across multiple client interfaces (App, Web, POP, Back Office). It also consumes and processes Kafka messages.
 
-### REST Endpoints (REST Web Services)
+### REST Endpoints
+Primarily synchronous, user-facing endpoints are located on the critical path of cart modifications and checkout.
 
-Endpoints are registered using the `core.framework` routing engine. The synchronous REST APIs are user-facing and form part of the critical path for managing shopping carts, modifying contents, updating payment details, and executing checkouts.
+#### A. Mobile App Clients (`AppCartWebService` & `WonderCartItemWebService`)
+- `POST /cart`: Creates a new app cart.
+- `DELETE /cart`: Deletes an app cart.
+- `DELETE /v2/cart`: Deletes an app cart with concurrent checks.
+- `DELETE /cart/delete-all`: Empties all items in the cart.
+- `PUT /cart/address`: Updates the cart's delivery address ID.
+- `PUT /cart/payment`: Updates the credit card and payment method.
+- `PUT /cart/utensils`: Updates utensil selection preferences.
+- `PUT /V2/cart/tip`: Updates the tips structure (type, value, amount).
+- `PUT /cart/donation`: Updates donation flag status.
+- `GET /cart/summary`: Retrieves cart summary information.
+- `PUT /cart`: Searches and fetches cart details.
+- `PUT /v2/cart/get`: Gets detailed cart response.
+- `GET /cart/check`: Checks the cart's overall status.
+- `PUT /cart/transfer`: Transfers cart from visitor/guest to a registered user.
+- `PUT /cart/clean-address`: Clears the delivery address.
+- `GET /cart/address/:ownerId`: Retrieves delivery address for a given owner ID.
+- `PUT /cart/promotion`: Applies or updates a promotion code.
+- `PUT /cart/hdr`: Updates Heaters/Delivery Restaurant (HDR) identifier or address ID.
+- `GET /cart/brand-category`: Retrieves categories of brands in the cart.
+- `GET /cart/hdr`: Retrieves HDR info for the cart.
+- `GET /cart/restaurant`: Retrieves restaurant information.
+- `PUT /cart/fast-pass`: Updates fast-pass selection.
+- `PUT /cart/schedule-time-slot`: Updates the selected schedule delivery time slot.
+- `PUT /cart/carry-over`: Carries over cart items from a prior session.
+- `PUT /cart/carry-over/preview`: Previews cart carry-over items.
+- `PUT /cart/clean-time-slot`: Clears the scheduled delivery time slot.
+- `POST /cart/record-reorder-cart`: Records a cart reorder event.
+- `PUT /cart/basic-info`: Updates basic cart info.
+- `PUT /cart/inventory-key/get`: Generates/retrieves an inventory key.
+- `POST /cart/item`: Adds an item to the app cart.
+- `POST /cart/item/reorder/batch-add`: Adds a batch of items from a previous order.
+- `GET /cart/item/:itemId`: Retrieves details for a specific item.
+- `PUT /cart/item/:itemId`: Updates customization options or quantity for a cart item.
+- `DELETE /cart/item/:itemId`: Deletes a specific cart item.
+- `PUT /cart/item/batch-delete`: Batch deletes multiple items.
+- `PUT /cart/quantity`: Updates cart item quantity.
 
-#### A. AppCartWebService (Mobile App) — Critical Path
-Exposed under the `/cart` namespace (registered in `CartModule` with `WonderAppCartWebServiceImpl`):
-- `POST /cart`: Create a new cart (`CreateWonderCartRequest` -> `CreateWonderCartResponse`).
-- `DELETE /cart`: Delete a cart (`DeleteWonderCartRequest`).
-- `DELETE /v2/cart`: Delete a cart with concurrent modification check (`DeleteWonderCartWithConcurrentCheckRequest`).
-- `DELETE /cart/delete-all`: Empty/clear all elements in the cart.
-- `PUT /cart/address`: Update cart's delivery address (`UpdateWonderCartAddressRequest`).
-- `PUT /cart/payment`: Update cart's payment method and credit card ID (`UpdateWonderCartPaymentRequest`).
-- `PUT /cart/utensils`: Set utensil requirement preference (`UpdateWonderCartUtensilsRequest`).
-- `PUT /V2/cart/tip`: Set tip option and amount (`UpdateWonderCartTipRequestV2`).
-- `PUT /cart/donation`: Enable or disable donation option (`UpdateWonderCartDonationRequest`).
-- `GET /cart/summary`: Retrieve cart price and item summary (`GetWonderCartSummaryRequest` -> `GetWonderCartSummaryResponse`).
-- `PUT /cart`: Search/query cart with filters (`SearchWonderCartRequest` -> `SearchWonderCartResponse`).
-- `PUT /v2/cart/get`: Fetch detailed current cart state (`GetAppCartRequest` -> `GetAppCartResponse`).
-- `GET /cart/check`: Run safety checks on cart items (`CheckWonderCartRequest` -> `CheckWonderCartResponse`).
-- `PUT /cart/transfer`: Transfer a visitor cart to a registered customer account (`TransferWonderCartRequest` -> `TransferWonderCartResponse`).
-- `PUT /cart/clean-address`: Reset the delivery address fields (`CleanWonderCartAddressRequest`).
-- `GET /cart/address/:ownerId`: Get the delivery address of the cart by `ownerId`.
-- `PUT /cart/promotion`: Apply or modify promotional code (`UpdateWonderCartPromotionRequest`).
-- `PUT /cart/hdr`: Update Heated Delivery Restaurant (HDR) identifier or address ID (`WonderCartUpdateHDROrAddressIdRequest`).
-- `GET /cart/brand-category`: Determine cart brand category (`GetCartBrandCategoryRequest` -> `GetCartBrandCategoryResponse`).
-- `GET /cart/hdr`: Retrieve the current HDR configurations for the cart (`GetCartHDRRequest` -> `GetCartHDRResponse`).
-- `GET /cart/restaurant`: Get active restaurant details linked to the cart (`GetWonderCartRestaurantRequest` -> `GetWonderCartRestaurantResponse`).
-- `PUT /cart/fast-pass`: Set fast pass delivery flag (`UpdateWonderCartFastPassRequest`).
-- `PUT /cart/schedule-time-slot`: Update scheduled delivery slot (`UpdateWonderCartScheduleTimeSlotRequest`).
-- `PUT /cart/carry-over`: Carry over items to new cart session (`WonderCartCarryOverRequest`).
-- `PUT /cart/carry-over/preview`: Preview items carried over to new session (`WonderCartCarryOverRequest` -> `CarryOverPreviewResponse`).
-- `PUT /cart/clean-time-slot`: Clear the delivery time slot (`CleanWonderCartScheduleTimeSlotRequest`).
-- `POST /cart/record-reorder-cart`: Track and log a cart reorder event (`RecordReorderCartRequest`).
-- `PUT /cart/basic-info`: Modify standard cart properties (`UpdateWonderCartBasicInfoRequest`).
-- `PUT /cart/inventory-key/get`: Query inventory validation key (`GetAppCartInventoryKeyRequest` -> `GetAppCartInventoryKeyResponse`).
+#### B. Web Clients (`WebCartWebService` & `WebCartItemWebService`)
+- `POST /web-cart`: Creates a web cart.
+- `DELETE /web-cart`: Deletes a web cart.
+- `DELETE /web-cart/delete-with-concurrent-check`: Deletes with concurrent check.
+- `DELETE /web-cart/delete-all`: Empties all items.
+- `PUT /web-cart/address`: Updates delivery address.
+- `PUT /web-cart/payment`: Updates payment information.
+- `PUT /web-cart/utensils`: Updates utensil preferences.
+- `PUT /web-cart/tip`: Updates tip amount.
+- `PUT /web-cart/donation`: Updates donation choice.
+- `GET /web-cart/summary`: Retrieves web cart summary.
+- `PUT /web-cart`: Searches and fetches cart details.
+- `PUT /v2/web-cart/get`: Gets detailed web cart response.
+- `GET /web-cart/restaurant`: Retrieves restaurant details.
+- `GET /web-cart/check`: Checks web cart status.
+- `PUT /web-cart/transfer`: Transfers guest web cart.
+- `PUT /web-cart/clean-address`: Clears web cart address.
+- `GET /web-cart/address/:ownerId`: Gets delivery address.
+- `PUT /web-cart/promotion`: Applies a promo code.
+- `PUT /web-cart/hdr`: Updates web cart HDR info.
+- `PUT /web-cart/hdr-and-address`: Updates web cart HDR and address IDs.
+- `GET /web-cart/hdr`: Retrieves HDR info.
+- `GET /web-cart/brand-category`: Retrieves brand categories.
+- `PUT /web-cart/fast-pass`: Updates fast pass selection.
+- `GET /web-cart/restaurant-id`: Retrieves associated restaurant ID.
+- `PUT /web-cart/schedule-time-slot`: Updates delivery scheduling slot.
+- `PUT /web-cart/carry-over`: Carries over web cart items.
+- `PUT /web-cart/carry-over/preview`: Previews carry over.
+- `POST /web-cart/item`: Adds an item.
+- `GET /web-cart/item/:itemId`: Retrieves item details.
+- `PUT /web-cart/item/:itemId`: Updates item options.
+- `DELETE /web-cart/item/:itemId`: Deletes a specific item.
+- `PUT /web-cart/item/batch-delete`: Batch deletes items.
+- `PUT /web-cart/item/quantity`: Updates quantity.
 
-#### B. WonderCartItemWebService (Mobile App Item Operations) — Critical Path
-Exposed under the `/cart/item` and `/cart/quantity` paths:
-- `POST /cart/item`: Add item to cart (`AddWonderCartItemRequest` -> `AddWonderCartItemResponse`).
-- `POST /cart/item/reorder/batch-add`: Batch add items during reordering (`BatchAddWonderCartItemRequest`).
-- `GET /cart/item/:itemId`: Query details of an individual item.
-- `PUT /cart/item/:itemId`: Update specific item options/customizations (`UpdateWonderCartItemRequest`).
-- `DELETE /cart/item/:itemId`: Remove an item from the cart.
-- `PUT /cart/item/batch-delete`: Remove multiple items in a single call (`BatchDeleteWonderCartItemRequest`).
-- `PUT /cart/quantity`: Directly update item quantity (`UpdateWonderCartQuantityRequest`).
+#### C. POP Clients (`POPCartWebService` & `POPCartItemWebService`)
+- `POST /pop/cart`: Creates a POP cart.
+- `DELETE /pop/cart`: Deletes a POP cart.
+- `DELETE /pop/cart/concurrent-check`: Deletes with concurrent check.
+- `DELETE /pop/cart/delete-all`: Empties POP cart.
+- `PUT /pop/cart/utensils`: Updates utensil choices.
+- `GET /pop/cart/summary`: Retrieves summary.
+- `PUT /pop/cart/refresh`: Refreshes POP cart.
+- `GET /pop/cart`: Retrieves POP cart.
+- `GET /pop/cart/hdr`: Gets associated HDR info.
+- `PUT /pop/cart/promotion`: Applies promo codes.
+- `PUT /pop/cart/phone`: Updates POP cart contact phone number.
+- `POST /pop/cart/item`: Adds a POP cart item.
+- `GET /pop/cart/item/:itemId`: Retrieves POP item.
+- `PUT /pop/cart/item/:itemId`: Updates POP item.
+- `DELETE /pop/cart/item/:itemId`: Deletes POP item.
+- `PUT /pop/cart/item/batch-delete`: Batch deletes items.
+- `PUT /pop/cart/quantity`: Updates POP item quantity.
 
-#### C. WebCartWebService (Web Client) — Critical Path
-Exposed under the `/web-cart` namespace:
-- `POST /web-cart`, `DELETE /web-cart`, `DELETE /web-cart/delete-with-concurrent-check`, `DELETE /web-cart/delete-all`
-- `PUT /web-cart/address`, `PUT /web-cart/payment`, `PUT /web-cart/utensils`, `PUT /web-cart/tip`, `PUT /web-cart/donation`
-- `GET /web-cart/summary`, `PUT /web-cart` (search), `PUT /v2/web-cart/get`, `GET /web-cart/check`, `PUT /web-cart/transfer`, `PUT /web-cart/clean-address`
-- `GET /web-cart/address/:ownerId`, `PUT /web-cart/promotion`, `PUT /web-cart/hdr`, `PUT /web-cart/hdr-and-address`
-- `GET /web-cart/hdr`, `GET /web-cart/brand-category`, `PUT /web-cart/fast-pass`, `GET /web-cart/restaurant-id`, `PUT /web-cart/schedule-time-slot`
-- `PUT /web-cart/carry-over`, `PUT /web-cart/carry-over/preview`
+#### D. Back Office Clients (`BOWonderCartWebService` & `BOWebCartWebService`)
+- `GET /bo/cart`: Fetches app cart details for Back Office operators.
+- `GET /bo/web-cart`: Fetches web cart details for Back Office operators.
 
-#### D. WebCartItemWebService (Web Client Item Operations) — Critical Path
-Exposed under `/web-cart/item` paths:
-- `POST /web-cart/item`, `GET /web-cart/item/:itemId`, `PUT /web-cart/item/:itemId`, `DELETE /web-cart/item/:itemId`, `PUT /web-cart/item/batch-delete`, `PUT /web-cart/item/quantity`
+---
 
-#### E. POPCartWebService & POPCartItemWebService (Point-of-Presence Client) — Critical Path
-Exposed under `/pop/cart` paths:
-- `POST /pop/cart`, `DELETE /pop/cart`, `DELETE /pop/cart/concurrent-check`, `DELETE /pop/cart/delete-all`, `PUT /pop/cart/utensils`, `GET /pop/cart/summary`, `PUT /pop/cart/refresh`, `GET /pop/cart`, `GET /pop/cart/hdr`, `PUT /pop/cart/promotion`, `PUT /pop/cart/phone`
-- `POST /pop/cart/item`, `GET /pop/cart/item/:itemId`, `PUT /pop/cart/item/:itemId`, `DELETE /pop/cart/item/:itemId`, `PUT /pop/cart/item/batch-delete`, `PUT /pop/cart/quantity`
+### Message Consumers & Asynchronous/Batch Jobs
+The service has no JVM-level `@Scheduled` background runners. Decoupled batch and periodic workloads are driven entirely via incoming Kafka messages:
 
-#### F. Back Office Web Services — Admin Path
-- `BOWonderCartWebService`: `GET /bo/cart` (Get cart details).
-- `BOWebCartWebService`: `GET /bo/web-cart` (Get web cart details).
+1. **`CleanDataMessageHandler`**
+   - **Trigger Topic:** `CommonTopic.CONSUMER_CLEAN_DATA` (`consumer-clean-data`)
+   - **Action:** Runs asynchronous batch cleanups on a primary master database, purging records older than 1 month from `carts`, `cart_items`, and carry-over history tables.
+   - **Frequency:** Driven by periodic messaging scheduled outside the JVM.
 
-#### G. Direct Route Registration
-- `POST /app/migrate-cart-bundle-item-choice`: Controller mapping to migrate cart bundle choices.
+2. **`CourierSupplyHealthTriggerPeriodicallyMessageHandler`**
+   - **Trigger Topic:** `courier-supply-health-trigger-periodically-message`
+   - **Action:** Gathers list of online active users from external notification service APIs (`AppOnlineUserWebService` and `WebOnlineUserWebService`) and self-publishes a `CourierSupplyHealthTriggerMessage` for every active user.
+   - **Frequency:** External periodic cron.
 
-### Asynchronous Message Consumers & Batch Jobs
-
-Rather than JVM-based local schedulers, the service utilizes Kafka messages to scale out asynchronous and periodic task executions:
-
-1. **CleanDataMessageHandler (Data Cleanup Job):**
-   - **Trigger:** Consumes `ConsumerCleanDataMessage` on topic `CommonTopic.CONSUMER_CLEAN_DATA` (only when `app.enableKafkaConsumer=true`).
-   - **Action:** Triggers parallel asynchronous executions of cleanup logic targeting database records (carts, cart items, web carts, web cart items, carry over histories, and reorder records) that have not been updated for more than one month.
-   - **Frequency:** Typically triggered via an external scheduler publishing periodically.
-
-2. **CourierSupplyHealthTriggerMessageHandler (Reactive Trigger Task):**
-   - **Trigger:** Consumes `CourierSupplyHealthTriggerMessage` on topic `WonderCartTopics.COURIER_SUPPLY_HEALTH_TRIGGER_MESSAGE_TOPIC`.
-   - **Action:** Gathers cart information and evaluates supply/demand data for couriers by publishing a request.
-   - **Frequency:** Highly frequent, executing reactively whenever active carts are created or updated.
-
-3. **CourierSupplyHealthTriggerPeriodicallyMessageHandler (Periodic Sync Task):**
-   - **Trigger:** Consumes `CourierSupplyHealthTriggerPeriodicallyMessage` on topic `WonderCartTopics.COURIER_SUPPLY_HEALTH_TRIGGER_PERIODICALLY_TOPIC`.
-   - **Action:** Requests all online users from `AppOnlineUserWebService` and `WebOnlineUserWebService` and publishes individual trigger messages for each to check and sync courier supply.
-   - **Frequency:** Run periodically, serving as a scheduled system sync.
+3. **`CourierSupplyHealthTriggerMessageHandler`**
+   - **Trigger Topic:** `courier-supply-health-trigger-message`
+   - **Action:** Real-time reactive processing. Compiles extensive cart contents, customer metadata, and pickup location details to publish `CourierSupplyHealthRequestMessage` for downstream supply engine consumption.
 
 ---
 
 ## 2. Database Access Patterns
 
-The service is backed by a MySQL database (`wonder_cart`) configured using the custom `core.framework` ORM layer. It separates read and write traffic by establishing primary and replica connections.
+The application connects to a MySQL database configured in `sys.properties`.
+
+### Tables Accessed & Query Types
+- **Tables:** `carts`, `cart_items`, `web_carts`, `web_cart_items`, `pop_carts`, `pop_cart_items`, `cart_bundle_item_choices`, `cart_bundle_item_choice_options`, `cart_menu_item_options`, `web_cart_bundle_item_choices`, `web_cart_bundle_item_choice_options`, `web_cart_menu_item_options`, `pop_cart_bundle_item_choices`, `pop_cart_menu_item_options`, `cart_carry_over_histories`, and `reorder_cart_created_records`.
+- **Primary / Index Queries:**
+  - `carts` is queried via `owner_id = ?` (Unique Index `uk_carts_owner_id`) or primary key `id`.
+  - `cart_items` is queried using `cart_id = ?` (covered by index `ix_cart_items_cart_id_updated_time`) or `owner_id = ? AND restaurant_id = ?` (Index `ix_cart_items_owner_id_restaurant_id`).
+- **Data Mutation Queries:** Row-level single updates and inserts for user cart items, customized choices, and scheduling.
+- **Batch Deletions:** Executed inside `CleanDataMessageHandler` to purge records older than a month.
+
+### Read Replicas
+- Read replica configuration is specified under `sys.jdbc.replicaUrl`.
+- Performance-critical read operations on background paths—specifically within `CourierSupplyHealthTriggerMessageHandler`—explicitly inject and query read replica repository beans (`@Inject @Named("replicaDB") Repository<Cart>...`) to divert read load away from the primary write master.
 
 ### Connection Pool Configuration
-- **Command Timeout:** Hardcoded timeout of `5 seconds` (`db().timeout(Duration.ofSeconds(5))`) inside `CartServiceApp.java`.
-- **Pool Size:** Configured to a max of `20` connections (`db().poolSize(20)`). This is a custom pool size intended to support high concurrent load. No dynamic setting exists in the properties file.
+- There is **no explicit configuration** of database connection pool sizing, idle limits, or wait timeouts in `app.properties` or `sys.properties`. The application relies completely on core.framework's default JDBC configuration.
 
-### Primary Database Entities & Repositories
-The following repositories are managed on the primary DB for read-write operations:
-- **App/Wonder Carts & Relations:** `Cart`, `CartItem`, `CartMenuItemOption`, `CartBundleItemChoice`, `CartBundleItemChoiceOption`, `ReorderCartCreatedRecord`
-- **Web Carts & Relations:** `WebCart`, `WebCartItem`, `WebCartMenuItemOption`, `WebCartBundleItemChoice`, `WebCartBundleItemChoiceOption`
-- **POP Carts & Relations:** `POPCart`, `POPCartItem`, `POPCartMenuItemOption`, `POPCartBundleItemChoice`, `POPCartBundleItemChoiceOption`
-- **Audit/History:** `CartCarryOverHistory`
-
-### Read Replica Database Entities & Repositories
-Read-only repositories are explicitly registered under the `@Named("replicaDB")` tag (pointing to `sys.jdbc.replicaUrl` in properties). Only select classes have replica repositories:
-- `Cart`, `CartItem`, `WebCart`, `WebCartItem`, `CartMenuItemOption`, `CartBundleItemChoice`, `CartBundleItemChoiceOption`, `WebCartMenuItemOption`, `WebCartBundleItemChoice`, `WebCartBundleItemChoiceOption`
-
-### Database Views
-The database registration includes two custom SQL query view entities:
-- `SearchCartView`
-- `SearchWebCartView`
-
-### Major Scalability Concerns in Queries & Indexes
-
-#### A. Full Table Scans on High-Volume Tables during Cleanups (Critical Concern)
-The asynchronous cleanup handler `CleanDataMessageHandler` queries the database in batches of 100 rows using `updated_time` comparison:
-- `SELECT id FROM carts WHERE updated_time <= ? LIMIT 100`
-- `SELECT id FROM web_carts WHERE updated_time <= ? LIMIT 100`
-- `SELECT id FROM cart_carry_over_histories WHERE updated_time <= ? LIMIT 100`
-
-However, checking the SQL table definition migrations (`R__carts.sql`, `R__web_carts.sql`, `R__cart_carry_over_histories.sql`) confirms:
-- **No index exists on `updated_time`** in any of these three tables! The only indexes configured are the primary keys (`id`) and unique indexes on `owner_id`.
-- This missing index forces MySQL to run **Full Table Scans** to evaluate the `updated_time` filter on tables containing potentially millions of rows. This will saturate database CPU and introduce long-duration transactional locking in production environments.
-- *Note:* The index `ix_created_time` does exist on `reorder_cart_created_records` for its cleanup path.
-
-#### B. Extensive Raw SQL Batch Deletes
-To purge cart relations, `CleanDataMessageHandler` executes raw batch deletes using `IN` clauses constructed dynamically:
-- `DELETE FROM tableName WHERE column IN (?, ?, ...)`
-This generates hundreds of dynamic SQL parameterized queries, adding to compile and execution overhead.
+### N+1 or Unbounded Queries
+- In `CourierSupplyHealthTriggerMessageHandler`, multiple separate queries are executed sequentially to fetch options and choices (`dataHelper.cartBundleItemChoiceMap(...)`, `dataHelper.cartBundleItemChoiceOptionMap(...)`, `dataHelper.cartItemOptionMap(...)`) for a single `ownerId`. While bulk loaded per owner, they result in consecutive database hits for each health trigger.
+- Unbounded queries or table scans are prevented as queries are strictly filtered by unique indices or mapped parent IDs.
 
 ---
 
-## 3. MongoDB / Atlas Access Patterns
+## 3. Kafka Usage
 
-- **Status:** **N/A**
-- The service does not use MongoDB. It depends entirely on MySQL for relational persistence. No MongoDB configurations, migrations, or repositories are registered.
+### Kafka Topics Consumed From
+- `consumer-clean-data` (from `CommonTopic.CONSUMER_CLEAN_DATA`)
+- `wonder-configuration-updated` (from `WonderConfigurationTopics.WONDER_CONFIGURATION_UPDATED`)
+- `corporate-order-client-changed` (from `CorporateOrderClientTopics.CORPORATE_ORDER_CLIENT_CHANGED`)
+- `courier-supply-health-trigger-message` (from `WonderCartTopics.COURIER_SUPPLY_HEALTH_TRIGGER_MESSAGE_TOPIC`)
+- `courier-supply-health-trigger-periodically-message` (from `WonderCartTopics.COURIER_SUPPLY_HEALTH_TRIGGER_PERIODICALLY_TOPIC`)
 
----
+### Kafka Topics Produced To
+- `consumer-clean-data` (during app initialization)
+- `delivery-courier-supply-health-check` (from `DeliverySupplyTopic.DELIVERY_COURIER_SUPPLY_HEALTH_CHECK`): Publishes health requests containing user cart payloads.
 
-## 4. Kafka Usage
+### Consumer Group and Concurrency Configuration
+- Max poll thresholds and concurrency settings are configured via framework setup:
+  - `kafka().maxPoll(CommonConfig.MAX_POLL_SIZE, CommonConfig.MAX_POLL_BYTES)`
+  - `kafka().concurrency(CommonConfig.CONCURRENCY)`
+- The real-time trigger message consumer concurrency is governed by a local in-process semaphore thread pool:
+  - `SemaphoreExecutorUtil.submitWithSemaphoreFromConfig` (permits controlled by `app.semaphore.permits` in `app.properties` which defaults to `5`).
 
-Kafka messaging is configured under `KafkaConsumerModule` and `CartModule`.
-
-### Produced Topics
-- `WonderCartTopics.COURIER_SUPPLY_HEALTH_TRIGGER_MESSAGE_TOPIC` (for `CourierSupplyHealthTriggerMessage`)
-- `DeliverySupplyTopic.DELIVERY_COURIER_SUPPLY_HEALTH_CHECK` (for `CourierSupplyHealthRequestMessage` - registered dynamically when `app.enableKafkaConsumer=true`)
-- `CommonTopic.CONSUMER_CLEAN_DATA` (for `ConsumerCleanDataMessage`)
-
-### Consumed Topics
-The message listeners are gated behind the `app.enableKafkaConsumer` properties flag. If set to `true`, the following topics are subscribed to:
-- `CommonTopic.CONSUMER_CLEAN_DATA` -> Handled by `CleanDataMessageHandler`
-- `WonderConfigurationTopics.WONDER_CONFIGURATION_UPDATED` -> Handled by `WonderConfigurationUpdatedMessageHandler`
-- `CorporateOrderClientTopics.CORPORATE_ORDER_CLIENT_CHANGED` -> Handled by `CorporateOrderClientChangedMessageHandler`
-- `WonderCartTopics.COURIER_SUPPLY_HEALTH_TRIGGER_MESSAGE_TOPIC` -> Handled by `CourierSupplyHealthTriggerMessageHandler` (using a specific TTL-based cache window)
-- `WonderCartTopics.COURIER_SUPPLY_HEALTH_TRIGGER_PERIODICALLY_TOPIC` -> Handled by `CourierSupplyHealthTriggerPeriodicallyMessageHandler`
-
-### Consumer Group & Concurrency Configuration
-- **Consumer Concurrency:** Configured using the system constant `CommonConfig.CONCURRENCY`.
-- **Max Poll Configuration:** Polling thresholds are restricted through `kafka().maxPoll(CommonConfig.MAX_POLL_SIZE, CommonConfig.MAX_POLL_BYTES)`.
-- **Blocking Loops:** No blocking `poll()` statements are in user code. Message processing is dispatched to a background thread pool managed by the framework's async `Executor`.
+### Blocking Poll Loops
+- N/A. Polling and partition thread allocation loops are completely encapsulated by the framework.
 
 ---
 
-## 5. Caching Strategy
+## 4. Caching Strategy
 
-The service utilizes a Redis-based cache framework (`core.framework.cache.Cache<T>`) to limit database reads on non-volatile configuration and cache downstream responses.
+The service leverages a Redis cluster configured via `sys.redis.host` and standard core.framework cache regions.
 
-### Registered Cache Regions & TTL configurations
-Registered within `CartModule.registerCache()`:
-- `DeliveryFeeConfigurationCache.class` (TTL: 12 hours)
-- `ServiceFeeConfigurationCache.class` (TTL: 12 hours)
-- `HDRFastPassConfigurationCache.class` (TTL: 12 hours)
-- `HDRTipConfigurationCache.class` (TTL: 12 hours)
-- `HDRTipConfigurationHardcodedValueCache.class` (TTL: 12 hours)
-- `CorporateOrderFeeAndDiscountCache.class` (TTL: 12 hours)
-- `WonderSpotServiceFeeConfigurationCache.class` (TTL: 12 hours)
-- `CustomerCache.class` (TTL: 10 minutes)
-- `CourierSupplyHealthRequestMessage.Pickup.class` (TTL: 1 day)
-- `CustomerAddressCache.class` (TTL: 1 day)
-- `RestaurantCache.class` (TTL: 1 day)
+### Cache Regions, TTLs, and Eviction Policies
+Cache regions are registered during application startup in `CartModule.java`:
 
-### Caching Mechanisms and Key Formats
-1. **Deduplication and Idempotency:**
-   - In `CourierSupplyHealthTriggerMessageHandler`, direct `Redis` client calls prevent duplicate supply triggers:
-     - Deduplication key: `"courier:supply:health:trigger:" + ownerId`
-     - Periodical deduplication key: `"courier_supply:user:" + ownerId`
-2. **Cache-Aside & Load-on-Miss:**
-   - Managed config services like `HDRTipConfigurationCacheService` retrieve configurations using key structures:
-     - Global: `"GLOBAL_HDR_TIP_CONFIGURATION_CACHE"`
-     - Per HDR: `"HDR_TIP_CONFIGURATION_CACHE:" + hdrId`
-     - If not cached, the cache loader calls external RPCs like `hdrTipConfigurationWebService.getGlobalTipConfiguration()`.
-3. **Reactive Invalidation/Eviction:**
-   - Cache invalidation is decoupled and handled asynchronously. When configuration settings update, `WonderConfigurationUpdatedMessageHandler` receives the `WonderConfigurationUpdatedMessage` over Kafka and invokes `refreshCache(...)` to overwrite the cached setting with the newest values.
+| Cache Region Class | TTL (Time-To-Live) | Eviction / Load Policy |
+| :--- | :--- | :--- |
+| `DeliveryFeeConfigurationCache` | **12 Hours** | Cache-Aside (`cache.get(key, loader)`) |
+| `ServiceFeeConfigurationCache` | **12 Hours** | Cache-Aside |
+| `HDRFastPassConfigurationCache` | **12 Hours** | Cache-Aside |
+| `HDRTipConfigurationCache` | **12 Hours** | Cache-Aside |
+| `HDRTipConfigurationHardcodedValueCache` | **12 Hours** | Cache-Aside |
+| `CorporateOrderFeeAndDiscountCache` | **12 Hours** | Evicted explicitly via `CorporateOrderClientChangedMessageHandler` |
+| `WonderSpotServiceFeeConfigurationCache` | **12 Hours** | Cache-Aside |
+| `CustomerCache` | **10 Minutes** | Cache-Aside (queries `CustomerWebService`) |
+| `CourierSupplyHealthRequestMessage.Pickup` | **1 Day (24h)** | Cache-Aside (queries `HDRWebService`) |
+| `CustomerAddressCache` | **1 Day (24h)** | Cache-Aside (queries `CustomerAddressWebService`) |
+| `RestaurantCache` | **1 Day (24h)** | Cache-Aside (queries `PublishedRestaurantWebService`) |
+
+### Direct Key-Value Rate Limiting (Idempotency)
+Direct Redis key manipulation is utilized in the message handlers to enforce rate-limiting:
+- `courier:supply:health:trigger:%s` (TTL = `app.courierSupplyHealthTriggerCache.durationOfSeconds` defaults to **10 seconds**). This enforces de-duplication of supply check requests.
+- `CourierSupplyHealthTriggerPeriodicallyMessageHandler.USER_KEY + ownerId` (TTL = **1 minute**). Prevents redundant evaluations for active users during periodic cycles.
 
 ### Graceful Degradation
-The cache-aside loading pattern naturally falls back to downstream database or HTTP calls on a cache miss. However, a major Redis outage will cause significant latency degradation and could overwhelm the downstream `wonder-setting-service` and core databases.
+All cache regions implement a "cache-aside" pattern with a supplier fallback block. On a cache miss, the system transparently fetches up-to-date data from MySQL or the respective HTTP API client. However, if the Redis cache is entirely offline, the service is vulnerable to cascading latency spikes and downstream API thread pool exhaustion.
 
 ---
 
-## 6. Resilience Configuration
+## 5. Resilience Configuration
 
-The service defines resilience properties using the custom configuration client `CLBConfig`.
+Resilience limits are handled in `APIClientModule.java` via the `CLBConfig` framework.
 
-### External SRE Review & Visibility Metadata
-The client registration module (`APIClientModule`) defines rigid operational parameters:
-- **SRE Stability Review Tag:** `@StabilityReview(ticket = "I-12345", reviewers = {"sre-team", "architect-team"})`
-- **Escalation Routing Metadata:** `@EscalationPath(owner = "cart-team", channels = {"#cart-alerts", "pagerduty-cart-team"})`
-- **Best Practice Assertion:** `@BestPracticeReminder(reminder = "All external API clients must have timeouts and fallbacks configured.")`
+### Configured Circuit Breakers, Retries, and Timeouts
+Explicit configurations only exist for GoogleBot-oriented checkout fallbacks:
+- `GoogleBotPublishedMenuItemWebService` & `GoogleBotPublishedBundleItemWebService` (targeting head-of-line search crawls) are bound with an explicit connect/read timeout of **5000 milliseconds** (`Timeout.MILLISECOND_5000`) and fallbacks `GoogleBotPublishedMenuItemWebServiceFallback` and `GoogleBotPublishedBundleItemWebServiceFallback`.
 
-### HTTP Client Connect & Read Timeouts
-Most client bindings specify an explicit timeout of `5000 milliseconds` (5 seconds) using `CLBConfig` options:
-- e.g., `config(CLBConfig.class).client(PublishedRestaurantWebService.class, url, Timeout.MILLISECOND_5000);`
-
-### Fallbacks & Circuit Breakers
-Only Back Office HTTP clients have explicit circuit breaker configurations with fallback implementations:
-- `GoogleBotPublishedMenuItemWebServiceFallback` (bound to `PublishedMenuItemWebService` clients on Google Bot route).
-- `GoogleBotPublishedBundleItemWebServiceFallback` (bound to `PublishedBundleItemWebService` clients on Google Bot route).
-
-### Missing Timeouts & Risk Vectors (Critical Concern)
-Despite the `@BestPracticeReminder` asserting that "All external API clients must have timeouts configured", static code analysis reveals **critical omissions**:
-- **PriceWebService:** The client bean `PriceWebService.class` (which handles order/pricing calculation) is registered with `api().client(...)` instead of `CLBConfig`, completely bypassing timeout and retry overrides:
-  ```java
-  api().client(PriceWebService.class, orderServiceURL);
-  ```
-- **Blue Apron Product Web Services:** Both `BACycleItemWebService.class` and `BAGlobalSettingWebService.class` also omit `CLBConfig` definitions:
-  ```java
-  api().client(BACycleItemWebService.class, blueApronProductServiceURL);
-  ```
-These omissions present a risk. A slow response from `order-service` (PriceWebService) or `blueapron-product-service` will tie up server worker threads in `wonder-cart-service`, potentially leading to thread pool exhaustion.
+### Missing Resilience and Default Cascade Risks
+- All remaining critical downstream API clients (including `PublishedRestaurantWebService`, `CustomerWebService`, `CustomerAddressWebService`, `SearchWebService`, etc.) are declared via simple URL bindings `config(CLBConfig.class).client(..., serviceURL)` in `APIClientModule.java`.
+- There are **no explicit read or connect timeout configurations**, nor any explicit circuit breakers or retries defined for these clients. They rely implicitly on library/framework defaults, presenting an operational risk of system-wide thread pool exhaustion if a critical downstream dependency slows down.
 
 ---
 
-## 7. External Dependencies
+## 6. External Dependencies
 
-The service serves as a coordinator on the critical path, interacting with various core services synchronously:
+The application acts as a central cart-orchestrator and performs synchronous downstream calls during the checkout and preparation lifecycle.
 
-### Synchronous (Blocking) External APIs
-- `restaurant-service-v2` (for published menu items, bundle items, and restaurants)
-- `customer-service` (for customer details, addresses, memberships, credit cards, and visitors)
-- `order-service` (for price calculations via `PriceWebService`)
-- `marketing-service` (for promotion codes and membership products)
-- `wonder-setting-service` (for tip configurations, service fees, and general configurations)
-- `customer-wallet-service` (for wallet details)
-- `search-service` (for query lookups)
-- `kitchen-management-service` (for HDR status)
+### Downstream HTTP Clients (CLB/API Client Beans)
+All clients are configured dynamically during initialization:
+- `HDRWebService` (`app.kitchenManagement.serviceURL`)
+- `PublishedRestaurantWebService` (`app.consumer.restaurant.serviceURL`)
+- `PublishedMenuItemWebService` (`app.consumer.restaurant.serviceURL`)
+- `PublishedBundleItemWebService` (`app.consumer.restaurant.serviceURL`)
+- `AliasUserWebService` (`app.consumer.customer.serviceURL`)
+- `CustomerWebService` (`app.consumer.customer.serviceURL`)
+- `CustomerAddressWebService` (`app.consumer.customer.serviceURL`)
+- `VisitorWebService` (`app.consumer.customer.serviceURL`)
+- `VisitorAddressWebService` (`app.consumer.customer.serviceURL`)
+- `CustomerCreditCardWebService` (`app.consumer.customer.serviceURL`)
+- `CustomerMembershipWebService` (`app.consumer.customer.serviceURL`)
+- `WebOnlineUserWebService` (`app.consumer.webOnlineUser.serviceURL`)
+- `AppOnlineUserWebService` (`app.consumer.appOnlineUser.serviceURL`)
+- `PriceWebService` (`app.order.serviceURL`)
+- `ConfigurationWebService` (`app.consumer.wonderSetting.serviceURL`)
+- `HDRFeeConfigurationWebService` (`app.consumer.wonderSetting.serviceURL`)
+- `HDRTipConfigurationWebService` (`app.consumer.wonderSetting.serviceURL`)
+- `CorporateOrderClientWebService` (`app.consumer.wonderSetting.serviceURL`)
+- `WonderSpotFeeConfigurationWebService` (`app.consumer.wonderSetting.serviceURL`)
+- `FeeConfigurationWebService` (`app.consumer.wonderSetting.serviceURL`)
+- `CustomerWalletWebService` (`app.consumer.customerWallet.serviceURL`)
+- `PromotionWebService` (`app.consumer.marketing.serviceURL`)
+- `MembershipProductWebService` (`app.consumer.marketing.serviceURL`)
+- `SegmentWebService` (`app.consumer.marketing.serviceURL`)
+- `SearchWebService` (`app.consumer.search.serviceURL`)
+- `BACycleItemWebService` (`app.blueApronProduct.serviceURL`)
+- `BAGlobalSettingWebService` (`app.blueApronProduct.serviceURL`)
 
-### Asynchronous (Non-Blocking) External APIs
-- `wonder-app-notification-service` / `wonder-web-notification-service` (queried periodically during syncs to fetch list of active users)
-- `blueapron-product-service` (product attributes and settings)
+### Timeout Settings
+- Except for GoogleBot crawler fallback APIs, **no explicit timeouts** are set for these outbound HTTP connections in the application.
 
 ---
 
-## 8. Scalability Signals
+## 7. Scalability Signals
 
-### JVM In-Process Semaphore Disabled (Replica Safety Factor)
-In early implementations, the service used `java.util.concurrent.Semaphore` inside `SemaphoreExecutorUtil` to limit parallel executions of the high-frequency courier supply health trigger tasks to `app.semaphore.permits` (set to `5`).
-- **Replica Risk:** Local JVM Semaphores are not replica-safe. Across `N` horizontal replicas, the total concurrency becomes `5 * N`, which risks overwhelming downstream services.
-- **Code Safeguard:** The current implementation has disabled the local semaphore completely. The initialization code outputs:
-  ```
-  Local semaphore is disabled. A distributed semaphore is needed to safely control concurrency across multiple replicas. Concurrency limit is currently unbounded.
-  ```
-  While this avoids JVM lock leakage and replica multiplier errors, the task execution queue is now completely unbounded, creating a risk of high CPU and memory pressure under extreme transaction bursts.
+### JVM-Local Concurrency Enforcement
+- `SemaphoreExecutorUtil` uses `java.util.concurrent.Semaphore`, which is a local, in-memory concurrency construct.
+- It is utilized inside `CourierSupplyHealthTriggerMessageHandler` to enforce a limit on trigger evaluations via the property `app.semaphore.permits` (set to `5` in dev).
+- **Scale-Out Violation:** This semaphore is not replica-safe. If the service is scaled horizontally to `N` replicas, the actual global concurrency limit becomes `5 * N`. If the semaphore's intent is to shield downstream APIs or databases from query surges, this protection breaks under horizontal scaling.
 
-### Horizontal Scaling Gating via Redis Lock Deduplication
-Because scheduling is decoupled using Kafka message consumption, the service can scale horizontally without task duplications. Multiple replicas will consume different partitions. For critical cron-like periodic tasks (e.g. syncing active users periodically), horizontal duplicates are prevented using a short-term Redis deduplication key (`"courier_supply:user:" + userId` with a 1-minute TTL).
+### Stateful Operations
+- The application layers are stateless: persistent states are stored in MySQL, and cached configurations and tokens are in Redis. Both components are replica-safe.
 
-### Full Statelessness
-The application remains completely stateless. No operational data is stored on local disk or inside static memory, ensuring that nodes can be torn down and scaled dynamically.
+### Scheduled Task Replica Safety
+- The periodic data purge (`CleanDataMessageHandler`) is triggered via a standard Kafka message subscription. Because only a single worker instance in the Kafka consumer group receives the message, it is guarded against concurrent execution across multiple replicas.
 
 ---
 
-## Key Scalability Signals (Top Concerns)
+## Key Scalability Signals
 
-1. **Full Table Scans on `carts` and `web_carts` during Cleanup Jobs (Critical Database Vector)**
-   The `CleanDataMessageHandler` issues monthly batch delete lookups using `updated_time <= ?` conditions. However, the schema definitions for `carts`, `web_carts`, and `cart_carry_over_histories` **do not have an index** on `updated_time`. This causes MySQL to execute massive Full Table Scans under load, spiking DB utilization and causing severe lock contention.
+1. **Non-Replica-Safe Semaphore for Throttling**:
+   The use of an in-memory `java.util.concurrent.Semaphore` inside `SemaphoreExecutorUtil` to govern `CourierSupplyHealthTriggerMessageHandler` concurrency is a critical flaw for horizontal scalability. Scaling the service to `N` instances scales the concurrent trigger evaluation limit to `permits * N`, which can potentially bypass downstream overload protections and flood dependent services.
 
-2. **Omitted Timeouts on Critical Price Calculation Dependency (Cascading Failure Risk)**
-   `PriceWebService` is bound to the `order-service` using a raw `api().client()` definition. It lacks the 5-second `CLBConfig` connect/read timeout and circuit breaker fallback applied to other clients. If `order-service` runs slow, incoming user checkout/cart updates will block worker threads, threatening thread pool exhaustion.
+2. **Sequential Blocking HTTP Requests (N+1 Fetching)**:
+   In `CourierSupplyHealthDataFetcher.fetchRestaurantInfos`, cache misses for multiple restaurant IDs are resolved by executing synchronous, blocking downstream requests sequentially inside a `for`-loop (`publishedRestaurantWebService.getBaseInfo`). This sequential HTTP execution path is a significant bottleneck under high trigger loads.
 
-3. **Unbounded Task Queue due to Disabled Concurrency Semaphore**
-   Because JVM Semaphores are not replica-safe, the local semaphore inside `SemaphoreExecutorUtil` has been disabled. However, without a distributed Redis semaphore to replace it, concurrency limits for the heavy reactive `CourierSupplyHealthTriggerMessageHandler` tasks are now completely unbounded, exposing the service to CPU and memory saturation under high-concurrency event spikes.
+3. **Absence of Explicit Timeouts and Circuit Breakers**:
+   The vast majority of external outbound clients (e.g. customer, search, order, pricing, wallet, and settings services) are registered without explicit connect/read timeouts or circuit breakers inside the codebase. In the event of latency spikes in any critical downstream dependency, container threads can easily become blocked, leading to cascade failures.
 
-4. **Memory Pressure on Mass Online User Periodical Syncs**
-   `CourierSupplyHealthTriggerPeriodicallyMessageHandler` pulls the entire list of active users from notification services synchronously, and loops over them sequentially in a single step. Under extreme user concurrency, handling very large collections of active user IDs in memory can lead to GC pauses and memory exhaustion.
+4. **Multiple Consecutive Database Hits Per Courier Trigger**:
+   For every reactive courier supply health event, the handler performs multiple consecutive database read queries to compile bundle item options and customizable choices for the owner. At high real-time transaction volumes, this behavior results in a high query-per-second (QPS) amplification factor.

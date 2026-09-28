@@ -6,7 +6,8 @@ public class MetricCollectionTaskPrompt {
      * It collects and writes raw values; it does no scoring, ranking or narrative writing, so it
      * runs on the cheapest model tier and keeps the expensive synthesis stage free of tool round-trips.
      * Placeholders: {{SERVICE}}, {{ENV}}, {{NAMESPACE}}, {{MYSQL_HOST}}, {{MYSQL_DB}},
-     * {{ATLAS_CLUSTER}}, {{KAFKA_CONSUMER_GROUPS}}, {{MYSQL_TABLES_PATH}}, {{OUTPUT_PATH}}
+     * {{ATLAS_CLUSTER}}, {{KAFKA_CONSUMER_GROUPS}}, {{MYSQL_TABLES_PATH}},
+     * {{AZURE_RESOURCE_GROUP}}, {{AZURE_SUBSCRIPTION}}, {{OUTPUT_PATH}}
      */
     public static final String CONTENT;
 
@@ -207,28 +208,72 @@ public class MetricCollectionTaskPrompt {
 
         Skip entirely only if the service uses no Azure-managed resource.
 
-        MySQL Flexible Server (skip if {{MYSQL_HOST}} is N/A):
-        - `get_mysql_flexible_server(name={{MYSQL_HOST}})` — SKU, vCPU, RAM, version, HA mode,
-          provisioned storage, storage auto-grow, IO scaling, compute tier.
-        - `list_mysql_flexible_server_configurations(server_name={{MYSQL_HOST}})` — `max_connections`,
-          `slow_query_log`, `long_query_time`.
-        - `list_mysql_flexible_server_replicas(server_name={{MYSQL_HOST}})` — replica hosts and HA.
-        - `get_metric(resource={{MYSQL_HOST}}, metric=storage_used, aggregation=Average)`.
-          If storage auto-grow is ON, collect **only** storage used and write it in GB — do not
-          collect `storage_limit` and do not compute a utilisation percentage, because the
-          provisioned limit expands automatically and the ratio is meaningless.
-          If auto-grow is OFF, also collect
-          `get_metric(resource={{MYSQL_HOST}}, metric=storage_limit, aggregation=Average)`
-          and record both values so the next stage can compute the percentage.
-        - `get_metric(resource={{MYSQL_HOST}}, metric=cpu_percent, aggregation=Average)`.
+        ### Naming — read this before the first Azure call
 
-        AKS node pools for the cluster hosting namespace {{NAMESPACE}}:
-        - `get_aks_node_pools(cluster=<cluster name>, resource_group=<rg>)` — per pool: node SKU,
-          min/max node count, spot vs on-demand.
+        - **Resource group**: `{{AZURE_RESOURCE_GROUP}}`
+        - **Subscription**: `{{AZURE_SUBSCRIPTION}}`
 
-        The Azure MCP server needs a live corporate network connection and an unexpired credential.
-        On failure write `NOT_COLLECTED: Azure MCP error — <reason>` once per affected value and
-        move on; do not retry the same call.
+        **`{{ENV}}` is a Datadog tag value, not an Azure name.** The resource group is *not*
+        derivable from it and never equals it — the environment tagged `uat` lives in the group
+        `FTIUat`, and `prod` lives in `RFProdV2`. Passing `{{ENV}}` as a resource group is the single
+        most common failure of this group and produces
+        `Resource group '{{ENV}}' could not be found`. Pass the value given above, verbatim.
+
+        If the resource group above reads `unknown`, **discover it, do not guess**: call
+        `group_list` once and choose the group whose name matches this environment, then use that
+        name for every later call in this group. One extra call is far cheaper than a whole group of
+        `NOT_COLLECTED`. Same for a subscription of `unknown` — omit the parameter entirely and let
+        the Azure CLI profile default apply; do not invent a GUID.
+
+        Azure MCP server names take the **short** server name. Strip any
+        `.mysql.database.azure.com` suffix from `{{MYSQL_HOST}}` before passing it.
+
+        ### Calling convention
+
+        The Azure MCP tools are hierarchical command routers, not flat functions: each call sets
+        `command` to a sub-command name and wraps that sub-command's arguments in `parameters`. Use
+        exactly the sub-command names below — they are the only ones that exist, and a plausible
+        invention like `get_mysql_flexible_server` or `get_aks_node_pools` will simply fail. If a
+        name below is ever rejected, call the same tool once with `learn=true` to list the real
+        sub-commands rather than guessing a second name.
+
+        ### MySQL Flexible Server (skip if {{MYSQL_HOST}} is N/A)
+
+        - `mysql` / `mysql_server_config_get` with `{server, resource-group, subscription}` —
+          returns ServerName, Location, Version, SKU, StorageSizeGB, BackupRetentionDays,
+          GeoRedundantBackup. Record the SKU, version and provisioned storage in GB.
+        - `mysql` / `mysql_server_param_get` with `{param, server, resource-group, subscription}`,
+          once per parameter, for `max_connections`, `slow_query_log` and `long_query_time`.
+          `max_connections` is the denominator the next stage scores connection saturation against,
+          so it matters more than anything else in this group — it is a per-SKU value in the
+          thousands, never something to assume.
+        - `mysql` / `mysql_list` with `{resource-group, subscription}` — every server in the group.
+          Read the replica hosts of `{{MYSQL_HOST}}` off this list; there is no dedicated replica
+          sub-command.
+
+        Storage: there is no per-metric Azure tool here, so take **provisioned** storage from
+        `mysql_server_config_get` (StorageSizeGB) and **used** storage from Datadog
+        `avg:azure.dbformysql_flexibleservers.storage_percent{...}` applied to it. When storage
+        auto-grow is ON, record the absolute used figure in GB only and compute no utilisation
+        percentage — the provisioned limit expands automatically, so the ratio is meaningless.
+
+        ### AKS node pools
+
+        - `aks` / `aks_cluster_get` with `{resource-group, subscription}` — lists the clusters in the
+          group. Take the cluster name from here; do not construct it from `{{ENV}}` or the
+          namespace `{{NAMESPACE}}`.
+        - `aks` / `aks_nodepool_get` with `{cluster, resource-group, subscription}` — per pool:
+          `name`, `vmSize`, `minCount`, `maxCount`, `count`, `enableAutoScaling`, `mode`. Record the
+          pool the application runs on, which is the `User`-mode pool with the largest `maxCount`.
+
+        Note that AKS creates a second, auto-managed group named after the cluster (e.g.
+        `<group>AKSClusterV2`) holding the node VMSS. The cluster resource itself lives in
+        `{{AZURE_RESOURCE_GROUP}}` — query that one, not the node group.
+
+        On failure write `NOT_COLLECTED: Azure MCP error — <reason>` once per affected value and move
+        on; do not retry the same call with the same arguments. Retry once only if the reason names
+        something you can correct from the rules above — a wrong resource group, a long server name,
+        or an invented sub-command.
 
         ## Group 8 — MySQL table storage: already collected
 

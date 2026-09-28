@@ -33,6 +33,8 @@ Optional fields:
 | Field | Default | Purpose |
 | :--- | :--- | :--- |
 | `app_code_paths` | whole repository | repo-relative modules to analyze; the single biggest lever on stage 1 cost |
+| `azure_resource_group` | read from the infra repository | Azure resource group holding this environment's resources |
+| `azure_subscription_id` | Azure CLI profile default | subscription the Azure MCP calls run against |
 | `skip_code_analysis` | `false` | reuse the existing `code-context.md` |
 | `skip_validation` | `false` | skip stage 5; roughly halves the MCP round-trips of a run |
 | `output_base_dir` | `reports` | where the run writes its files |
@@ -84,6 +86,22 @@ from the `<mysql-host-short-name>-<mysql-db>` entry still present in `~/.gemini/
 `rfprodv2-flexible-wonder-db-wonder_cart`) — that entry carries the routable host, which the Azure
 resource name in the request does not. A database that needs the VPN degrades to a `NOT_COLLECTED:`
 line rather than failing the run.
+
+### Azure names are not the review's `env`
+
+The `env` in the request is a Datadog tag — `uat`, `prod` — and is never the Azure resource group:
+Terraform declares the group as `name = var.env`, so `uat` is `FTIUat` and `prod` is `RFProdV2`.
+Stage 2 therefore reads the group out of `<env>/app/infra/env/01-variables.tf` in the local infra
+repository and passes it to the metric stage, which uses it for every Azure MCP call. Pass
+`azure_resource_group` in the request to override that, e.g. for a service whose resources live in
+another group.
+
+Setting `AZURE_RESOURCE_GROUP` / `AZURE_SUBSCRIPTION_ID` in the environment also works, but note that
+those two variables are read by the *scheduled* pipeline's `AzureMCPStage`, which calls Azure
+Resource Manager over plain HTTP. The local review reaches Azure through the Azure MCP server the
+Gemini CLI starts, where the resource group is a **tool argument** — so an environment variable alone
+never reaches it, and a run with no group resolved fails every Azure call with
+`Resource group '<env>' could not be found`.
 
 Authentication is **pinned to Vertex AI with Application Default Credentials** and is not inherited
 from the shell. `GOOGLE_API_KEY` / `GEMINI_API_KEY` are stripped from the CLI subprocess

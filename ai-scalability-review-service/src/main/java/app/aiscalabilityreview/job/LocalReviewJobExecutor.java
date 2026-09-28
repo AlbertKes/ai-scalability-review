@@ -198,6 +198,8 @@ public class LocalReviewJobExecutor {
             params.atlasCluster = request.atlasCluster;
             params.kafkaConsumerGroups = request.kafkaConsumerGroups;
             params.mysqlTablesPath = paths.mysqlTables();
+            params.azureResourceGroup = azureResourceGroup(request);
+            params.azureSubscriptionId = firstSet(request.azureSubscriptionId, System.getenv("AZURE_SUBSCRIPTION_ID"));
             params.outputPath = paths.metrics();
             return geminiCliService.run(new GeminiRunRequest(
                 LocalReviewPromptBuilder.buildMetricCollectionPrompt(params), model,
@@ -272,6 +274,32 @@ public class LocalReviewJobExecutor {
         } catch (IOException e) {
             logger.warn("Could not write the code context placeholder to {}: {}", path, e.getMessage());
         }
+    }
+
+    /**
+     * The request wins, so a service whose resources sit outside the environment's own group can say
+     * so; otherwise the group is read from the infra repository. Null is passed through to the prompt
+     * as "unknown", which asks the model to discover the group — guessing it from {@code env} is what
+     * produced a report full of `Resource group 'uat' could not be found`.
+     */
+    private String azureResourceGroup(GenerateLocalReviewRequest request) {
+        String configured = firstSet(request.azureResourceGroup, System.getenv("AZURE_RESOURCE_GROUP"));
+        if (configured != null) return configured;
+        String derived = infraContextService.azureResourceGroup(request.localInfraRepoPath, request.env);
+        if (derived == null) {
+            logger.warn("Could not resolve the Azure resource group for env {}; the metric stage will discover it",
+                request.env);
+        } else {
+            logger.info("Resolved the Azure resource group for env {} to {}", request.env, derived);
+        }
+        return derived;
+    }
+
+    private String firstSet(String... values) {
+        for (String value : values) {
+            if (!Strings.isBlank(value)) return value;
+        }
+        return null;
     }
 
     private void runGeminiStage(String jobId, String stageName, boolean fatal, LocalReviewRunStats stats, GeminiStageAction action) {

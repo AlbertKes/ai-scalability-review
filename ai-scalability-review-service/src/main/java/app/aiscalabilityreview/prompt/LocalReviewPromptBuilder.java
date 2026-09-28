@@ -22,6 +22,8 @@ import java.util.stream.Collectors;
 public class LocalReviewPromptBuilder {
     private static final String CHECKPOINT = ClasspathResources.text("doc/scalability-review-checkpoint.md");
     private static final String NOT_AVAILABLE = "N/A";
+    /** Reads as an instruction in the prompts: an unresolved Azure name must be discovered, not guessed. */
+    private static final String UNKNOWN = "unknown";
 
     private static final String CODE_ANALYSIS_SOURCES = """
 
@@ -217,6 +219,8 @@ public class LocalReviewPromptBuilder {
             .replace("{{MYSQL_HOST}}", nvl(p.mysqlHost, NOT_AVAILABLE))
             .replace("{{MYSQL_DB}}", nvl(p.mysqlDb, NOT_AVAILABLE))
             .replace("{{MYSQL_TABLES_PATH}}", p.mysqlTablesPath)
+            .replace("{{AZURE_RESOURCE_GROUP}}", nvl(p.azureResourceGroup, UNKNOWN))
+            .replace("{{AZURE_SUBSCRIPTION}}", nvl(p.azureSubscriptionId, UNKNOWN))
             .replace("{{ATLAS_CLUSTER}}", nvl(p.atlasCluster, NOT_AVAILABLE))
             .replace("{{KAFKA_CONSUMER_GROUPS}}", nvl(p.kafkaConsumerGroups, NOT_AVAILABLE))
             .replace("{{OUTPUT_PATH}}", p.outputPath);
@@ -302,6 +306,8 @@ public class LocalReviewPromptBuilder {
         public String atlasCluster;
         public String kafkaConsumerGroups;
         public String mysqlTablesPath;
+        public String azureResourceGroup;
+        public String azureSubscriptionId;
         public String outputPath;
     }
 

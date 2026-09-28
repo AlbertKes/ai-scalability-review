@@ -71,19 +71,43 @@ class LocalReviewPromptBuilderTest {
             .contains("Do not query MySQL and do not look for a MySQL MCP server");
     }
 
+    /** A resolved resource group must reach the prompt verbatim; env must never be offered as one. */
+    @Test
+    void metricCollectionPromptCarriesTheResolvedAzureNames() {
+        MetricCollectionParams params = metricParams();
+        params.azureResourceGroup = "FTIUat";
+        params.azureSubscriptionId = "33a0344b-7e99-4718-938e-cb85df661a8c";
+
+        assertThat(LocalReviewPromptBuilder.buildMetricCollectionPrompt(params))
+            .doesNotContain("{{")
+            .contains("**Resource group**: `FTIUat`")
+            .contains("**Subscription**: `33a0344b-7e99-4718-938e-cb85df661a8c`")
+            .contains("mysql_server_param_get")
+            .contains("aks_nodepool_get")
+            .contains("mysql_server_config_get")
+            .contains("aks_cluster_get")
+            // the invented names are named only as examples of what fails
+            .contains("like `get_mysql_flexible_server` or `get_aks_node_pools` will simply fail");
+    }
+
+    /** Unresolved names must read as "discover it", never leave the model to guess from env. */
+    @Test
+    void metricCollectionPromptAsksForDiscoveryWhenTheAzureNamesAreUnresolved() {
+        MetricCollectionParams params = metricParams();
+        params.azureResourceGroup = null;
+        params.azureSubscriptionId = null;
+
+        assertThat(LocalReviewPromptBuilder.buildMetricCollectionPrompt(params))
+            .doesNotContain("{{")
+            .contains("**Resource group**: `unknown`")
+            .contains("discover it, do not guess")
+            .contains("is a Datadog tag value, not an Azure name");
+    }
+
     /** Every per-window figure has to be rolled up, both to be derivable and to keep the response small. */
     @Test
     void metricCollectionPromptRollsUpTheDatadogQueries() {
-        MetricCollectionParams params = new MetricCollectionParams();
-        params.serviceId = "wonder-cart-service";
-        params.env = "uat";
-        params.namespace = "uat-consumer";
-        params.mysqlHost = "N/A";
-        params.mysqlDb = "N/A";
-        params.mysqlTablesPath = "/out/mysql-tables.md";
-        params.outputPath = "/out/metrics.md";
-
-        assertThat(LocalReviewPromptBuilder.buildMetricCollectionPrompt(params))
+        assertThat(LocalReviewPromptBuilder.buildMetricCollectionPrompt(metricParams()))
             .contains(".as_count().rollup(sum, 86400)")
             .contains(".as_count().rollup(sum, 3600)")
             .contains("`to - 2419200`")
@@ -172,6 +196,18 @@ class LocalReviewPromptBuilderTest {
         assertThat(LocalReviewPromptBuilder.mysqlConnectionName("host", "order")).isEqualTo("host-order");
         assertThat(LocalReviewPromptBuilder.mysqlConnectionName("N/A", "order")).isNull();
         assertThat(LocalReviewPromptBuilder.mysqlConnectionName("host", null)).isNull();
+    }
+
+    private MetricCollectionParams metricParams() {
+        MetricCollectionParams params = new MetricCollectionParams();
+        params.serviceId = "wonder-cart-service";
+        params.env = "uat";
+        params.namespace = "uat-consumer";
+        params.mysqlHost = "N/A";
+        params.mysqlDb = "N/A";
+        params.mysqlTablesPath = "/out/mysql-tables.md";
+        params.outputPath = "/out/metrics.md";
+        return params;
     }
 
     private ValidationPromptParams validationParams() {

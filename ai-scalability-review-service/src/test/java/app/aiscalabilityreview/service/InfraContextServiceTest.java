@@ -100,6 +100,43 @@ class InfraContextServiceTest {
         assertThat(Files.readString(output)).contains("directory not found");
     }
 
+    /**
+     * The Azure resource group is the Terraform `env` variable, which bears no resemblance to the
+     * Datadog env tag the review is keyed by — guessing "prod" instead of "RFProdV2" is what filled an
+     * earlier report with `Resource group 'prod' could not be found`.
+     */
+    @Test
+    void readsTheAzureResourceGroupFromTerraform() throws IOException {
+        write("prod/app/infra/env/01-variables.tf", """
+            variable "env" {
+              type    = string
+              default = "RFProdV2"
+            }
+
+            variable "logicalEnv" {
+              type    = string
+              default = "prod"
+            }
+            """);
+
+        assertThat(new InfraContextService().azureResourceGroup(repo.toString(), "prod")).isEqualTo("RFProdV2");
+        assertThat(new InfraContextService().azureResourceGroup(repo.toString(), "PROD")).isEqualTo("RFProdV2");
+    }
+
+    @Test
+    void returnsNoAzureResourceGroupWhenTerraformDoesNotDeclareOne() throws IOException {
+        assertThat(new InfraContextService().azureResourceGroup(repo.toString(), "prod")).isNull();
+
+        write("prod/app/infra/env/01-variables.tf", "variable \"location\" {\n  default = \"eastus\"\n}\n");
+        assertThat(new InfraContextService().azureResourceGroup(repo.toString(), "prod")).isNull();
+    }
+
+    @Test
+    void returnsNoAzureResourceGroupWithoutAnInfraRepository() {
+        assertThat(new InfraContextService().azureResourceGroup(null, "prod")).isNull();
+        assertThat(new InfraContextService().azureResourceGroup(repo.toString(), null)).isNull();
+    }
+
     @Test
     void includesAFileMatchedByTwoCollectionsOnlyOnce() throws IOException {
         write("prod/app/infra/env/20-shared.tf", "node_pool for rfprodv2-flexible-wonder-db\n");

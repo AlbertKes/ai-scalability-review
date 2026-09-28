@@ -49,6 +49,15 @@ public class GenerateLocalReviewRequest {
     @Property(name = "atlas_cluster")
     public String atlasCluster;  // MongoDB Atlas cluster name, or null if not used
 
+    // Azure names, not Datadog tags: env "uat" lives in resource group "FTIUat". Both are optional —
+    // the resource group is read from the infra repository when omitted, and the subscription falls
+    // back to the Azure CLI profile default.
+    @Property(name = "azure_resource_group")
+    public String azureResourceGroup;
+
+    @Property(name = "azure_subscription_id")
+    public String azureSubscriptionId;
+
     @NotNull
     @NotBlank
     @Property(name = "hpa_type")

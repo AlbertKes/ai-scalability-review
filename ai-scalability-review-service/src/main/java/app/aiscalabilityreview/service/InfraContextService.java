@@ -12,6 +12,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
@@ -39,6 +41,9 @@ public class InfraContextService {
      * cross-reference the cluster, while these four only appear where node pools are declared.
      */
     private static final List<String> NODE_POOL_KEYWORDS = List.of("node_pool", "kubernetes_cluster", "vm_size", "node_count");
+    /** {@code variable "env" { type = string  default = "FTIUat" }} — the Azure name of the environment. */
+    private static final Pattern ENV_VARIABLE_DEFAULT =
+        Pattern.compile("variable\\s+\"env\"\\s*\\{[^}]*?default\\s*=\\s*\"([^\"]+)\"", Pattern.DOTALL);
     private static final int MAX_FILE_CHARS = 64 * 1024;
     private static final int MAX_TOTAL_CHARS = 384 * 1024;
 
@@ -82,6 +87,34 @@ public class InfraContextService {
             selection.includedCount, document.length(), selection.skipped.size());
         logger.info("Built infra context for {}: {} -> {}", params.serviceId(), summary, output);
         return summary;
+    }
+
+    /**
+     * Azure resource group that hosts this environment, read from the infra repository.
+     *
+     * <p>It cannot be derived from the review's {@code env}: that value is a Datadog tag — {@code uat},
+     * {@code prod} — while the Azure name is {@code FTIUat} or {@code RFProdV2}. Terraform declares
+     * the group as {@code name = var.env} in {@code 02-provider.tf}, so the group name is the default
+     * of the {@code env} variable in {@code <env>/app/infra/env/01-variables.tf}. Returns null when
+     * that file or variable is absent, which the prompt turns into a discovery call rather than a
+     * guess — a guessed group is what produced "Resource group 'uat' could not be found".
+     */
+    public String azureResourceGroup(String infraRepoPath, String env) {
+        if (Strings.isBlank(infraRepoPath) || Strings.isBlank(env)) return null;
+        Path variables = Path.of(infraRepoPath).toAbsolutePath()
+            .resolve(env.toLowerCase(Locale.US) + "/app/infra/env/01-variables.tf");
+        if (!Files.exists(variables)) {
+            logger.warn("No {} in the infra repository; the Azure resource group stays unresolved", variables);
+            return null;
+        }
+        try {
+            Matcher matcher = ENV_VARIABLE_DEFAULT.matcher(Files.readString(variables));
+            if (matcher.find()) return matcher.group(1);
+            logger.warn("No `variable \"env\"` default in {}; the Azure resource group stays unresolved", variables);
+        } catch (IOException e) {
+            logger.warn("Could not read {}: {}", variables, e.getMessage());
+        }
+        return null;
     }
 
     private boolean isPresent(String value) {
