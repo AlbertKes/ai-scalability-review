@@ -50,7 +50,7 @@ public class ReviewTaskPrompt {
         - `[Source: code → <exact file path>]` — a configuration value from `{{INFRA_CONTEXT_PATH}}`;
           use the repository path shown in that file's heading, not the context file name.
         - `[Source: context → code-context.md]` — a value from the business context document.
-        - `[Source: Azure MCP → <tool name>(<args>)]`, `[Source: MySQL MCP → <exact SQL query>]`,
+        - `[Source: Azure MCP → <tool name>(<args>)]`, `[Source: MySQL (<host>/<db>) → <exact SQL query>]`,
           `[Source: Datadog MCP → query_metrics("<exact metric query>")]` — copy the annotation
           verbatim from `{{METRICS_PATH}}`.
 

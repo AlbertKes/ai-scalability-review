@@ -33,7 +33,7 @@ public class ReportFormatPrompt {
         | approximately 500 MB working set | `476 MB` working set |
 
         **Every metric value must carry a `[Source: ...]` annotation** referencing the exact
-        Datadog query, Azure MCP call, MySQL MCP query, or code file path that produced it.
+        Datadog query, Azure MCP call, MySQL query, or code file path that produced it.
         This rule applies in **all sections**. The only exception is the bulleted critical findings
         list in the Executive Summary, where a value that is already fully annotated in Section 4
         does not need a second `[Source: ...]`.
@@ -278,6 +278,36 @@ public class ReportFormatPrompt {
 
         If there is nothing to recommend, write "No action items." and no numbered entries.
 
+        A recommendation is read as an instruction to spend engineering time, so a false one costs
+        more than a missing one. Every entry must satisfy all five rules below; drop the entry rather
+        than weaken it, and prefer four verified recommendations to seven speculative ones.
+
+        1. **Cite the primary source, not the context file.** The **Finding** names the file and the
+           symbol it is about — `CleanDataMessageHandler.deleteAppCartHandler`,
+           `R__carts.sql`, `app.semaphore.permits` — so a reader can open it. `code-context.md` is a
+           summary written by an earlier stage; quoting it as the only source makes the finding
+           unverifiable, and any error in it propagates silently.
+        2. **No recommendation built on a metric that was not collected.** If the number that would
+           justify the action is marked `NOT_COLLECTED`, the only honest recommendation is to collect
+           it — "verify and record `max_connections` for this server" is sound, "raise
+           `max_connections` to N" is not, because you do not know the current value.
+        3. **Every number traceable.** A timeout, connection limit, batch size, replica count or
+           threshold in the **Action** must come from a collected metric, a value this codebase
+           already uses for the same purpose, or a documented platform default — and the Action says
+           which. Reuse the codebase's own number where one exists: if the sibling clients in the
+           same module are registered with a 5000 ms timeout, recommend 5000 ms.
+        4. **Do not recommend what already exists.** Before writing an action, check the code context
+           for the mechanism it asks for. If a semaphore, cache guard, index, circuit breaker or
+           async dispatch is already in place, either drop the recommendation or narrow it to the
+           part that genuinely is missing, and say what is already covered.
+        5. **Do not size a service change from a shared-resource metric.** The
+           `azure.dbformysql_flexibleservers.*` metrics are per **server**, and one flexible server
+           hosts every service in the domain. Such a number may motivate a recommendation owned by
+           the platform team, but it cannot be attributed to this service's behaviour.
+
+        The Executive Summary's numbered critical-findings list restates these same claims, so a
+        finding that fails any rule above must not appear there either.
+
         ---
 
         ## 8. Footer
@@ -295,6 +325,8 @@ public class ReportFormatPrompt {
         Confirm every line before finalising the report:
 
         - [ ] All 8 sections present, in order, with the numbering shown above
+        - [ ] Every recommendation cites a file and symbol, invents no number, rests on no
+              NOT_COLLECTED metric, and is not already implemented
         - [ ] Executive Summary narrative paragraphs contain no numeric metric values
         - [ ] Infrastructure Configuration table has every required row (or `N/A`)
         - [ ] MySQL sub-table present if and only if MySQL table storage was collected

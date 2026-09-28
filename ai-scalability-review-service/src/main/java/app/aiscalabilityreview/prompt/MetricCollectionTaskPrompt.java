@@ -6,7 +6,7 @@ public class MetricCollectionTaskPrompt {
      * It collects and writes raw values; it does no scoring, ranking or narrative writing, so it
      * runs on the cheapest model tier and keeps the expensive synthesis stage free of tool round-trips.
      * Placeholders: {{SERVICE}}, {{ENV}}, {{NAMESPACE}}, {{MYSQL_HOST}}, {{MYSQL_DB}},
-     * {{ATLAS_CLUSTER}}, {{KAFKA_CONSUMER_GROUPS}}, {{MYSQL_MCP}}, {{OUTPUT_PATH}}
+     * {{ATLAS_CLUSTER}}, {{KAFKA_CONSUMER_GROUPS}}, {{MYSQL_TABLES_PATH}}, {{OUTPUT_PATH}}
      */
     public static final String CONTENT;
 
@@ -22,104 +22,188 @@ public class MetricCollectionTaskPrompt {
         - **Service**: {{SERVICE}}
         - **Environment**: {{ENV}}
         - **Namespace**: {{NAMESPACE}}
-        - **Lookback window**: 28 days (`from = now - 28d`, `to = now`)
         - **MySQL host/cluster**: {{MYSQL_HOST}}  ("N/A" if the service does not use MySQL)
         - **MySQL database**: {{MYSQL_DB}}  ("N/A" if MYSQL_HOST is N/A)
-        - **MySQL MCP server**: {{MYSQL_MCP}}
         - **Atlas MongoDB cluster**: {{ATLAS_CLUSTER}}  ("N/A" if the service does not use MongoDB)
         - **Kafka consumer groups**: {{KAFKA_CONSUMER_GROUPS}}  (comma-separated, or "N/A")
+
+        ## The lookback window
+
+        Every Datadog query uses the **same day-aligned 28-day window**, so that the daily buckets
+        below come back complete and the four weekly totals are four whole weeks:
+
+        - `to` = today's 00:00:00 UTC, as epoch **seconds**.
+        - `from` = `to - 2419200` (28 × 86400).
+
+        Compute both numbers once, state them at the top of your working, and pass exactly those
+        values to every `query_metrics` call. Do not use `now` as `to` — a partial final day makes
+        the last daily bucket and the last week incomplete.
 
         ## Rules
 
         1. **Attribution.** Every value you write carries the source that produced it:
            - `[Source: Datadog MCP → query_metrics("<exact metric query>")]`
            - `[Source: Azure MCP → <tool name>(<args>)]`
-           - `[Source: MySQL MCP ({{MYSQL_MCP}}) → <exact SQL>]`
            When you fetch several metrics in one batched call, annotate each value with **its own**
            query expression, not the batched string.
         2. **No approximations.** Write the exact figure returned by the tool. Never write "around",
            "about", "approximately", "roughly", "~", "under" or "over" in front of a value.
-        3. **No invention.** If a value cannot be retrieved, write
-           `NOT_COLLECTED: <reason>` and name the source you attempted. Never guess, never estimate,
-           and never leave a required bullet out of the file.
+        3. **`NOT_COLLECTED` is for tool failures, not for work.** Write `NOT_COLLECTED: <reason>`
+           only when the tool returned an error, the component is not used by this service, or the
+           metric reported no data at all — and name the source you attempted. Deriving an average,
+           a peak, a per-day or per-week total, a growth percentage, or **the timestamp of a peak**
+           from data a tool has already returned is part of this task, not a limitation of the tool.
+           Never write a reason of the form "complex data derivation", "beyond current capabilities",
+           "the MCP does not support …" or "timestamp extraction is not supported" — if the numbers
+           are in the response, compute them. Never guess and never estimate.
         4. **Minimise round-trips.** Datadog accepts several metric expressions in a single
            `query_metrics` call as a comma-separated query string. Group the queries below into one
            call per group. Do not re-run a query you already ran in this session; reuse the result.
         5. **Skip conditions are explicit.** When a block says "skip if X is N/A" and X is N/A, write
            the section heading followed by `SKIPPED: <parameter> is N/A` instead of dropping it.
 
+        ## Reading a `query_metrics` response
+
+        The tool returns `{"response": {"status": ..., "series": [...]}}`. Each entry of `series`
+        carries:
+
+        - `expression` — which of the comma-separated expressions this series answers. Match series
+          to expression by this field, never by position in the array.
+        - `pointlist` — `[[<epoch_milliseconds>, <value>], …]`, oldest first.
+        - `unit` — the unit of `value`. Note its `scaleFactor`: it is what a dashboard would apply
+          to *render* the number, and you must not apply it twice.
+
+        Everything below this line is arithmetic over `pointlist`, and all of it is your job:
+
+        - **Average over the window** = the mean of the point values.
+        - **Peak** = the point with the largest value. Its **timestamp is that point's first
+          element**, in epoch milliseconds: divide by 1000 and format it as `YYYY-MM-DD HH:mm UTC`.
+          Every peak has a timestamp, because every point carries one.
+        - **Worst day** = with a `rollup(…, 86400)` bucket, the bucket with the worst value; its date
+          is that bucket's timestamp.
+        - **Point values are raw.** Use them exactly as returned and convert them with the rule
+          stated in each group. Never copy a pre-rounded figure out of `displayName` or `unit`, and
+          sanity-check the magnitude: one raw `kubernetes.cpu.usage.total` point for a live pod is
+          in the millions of nanocores (1e6 – 1e9), never single digits.
+        - **A missing series is not a failed query.** `status: "ok"` with no series for an
+          expression means that metric reported nothing in the window: write `0` for an
+          `.as_count()` sum and `NOT_COLLECTED: no data reported in the window` for a gauge.
+        - **Bucket with `.rollup(<aggregator>, <seconds>)`** wherever a group asks for per-day or
+          per-week figures. It is the only way to get one point per bucket, and it also keeps the
+          response small: an unrolled 28-day query returns thousands of points and costs far more
+          than the same query rolled up to 28.
+
         ---
 
-        ## Group 1 — Datadog: traffic, latency, errors
+        ## Group 1 — Datadog: daily traffic, latency, errors
 
-        One `query_metrics` call, query string = these expressions joined by commas:
+        One `query_metrics` call, query string = these expressions joined by commas. Each returns
+        exactly 28 daily points over the aligned window:
 
-        - `sum:trace.undertow_http.request.hits{env:{{ENV}},service:{{SERVICE}}}.as_count()`
-        - `p50:trace.undertow_http.request{env:{{ENV}},service:{{SERVICE}}}`
-        - `p95:trace.undertow_http.request{env:{{ENV}},service:{{SERVICE}}}`
-        - `p99:trace.undertow_http.request{env:{{ENV}},service:{{SERVICE}}}`
-        - `sum:trace.undertow_http.request.errors{env:{{ENV}},service:{{SERVICE}}}.as_count()`
-        - `sum:kubernetes.containers.restarts{env:{{ENV}},service:{{SERVICE}}}`
+        - `sum:trace.undertow_http.request.hits{env:{{ENV}},service:{{SERVICE}}}.as_count().rollup(sum, 86400)`
+        - `sum:trace.undertow_http.request.errors{env:{{ENV}},service:{{SERVICE}}}.as_count().rollup(sum, 86400)`
+        - `p50:trace.undertow_http.request{env:{{ENV}},service:{{SERVICE}}}.rollup(avg, 86400)`
+        - `p95:trace.undertow_http.request{env:{{ENV}},service:{{SERVICE}}}.rollup(avg, 86400)`
+        - `p99:trace.undertow_http.request{env:{{ENV}},service:{{SERVICE}}}.rollup(avg, 86400)`
+        - `p99:trace.undertow_http.request{env:{{ENV}},service:{{SERVICE}}}.rollup(max, 86400)`
+        - `sum:kubernetes.containers.restarts{env:{{ENV}},service:{{SERVICE}}}.rollup(sum, 86400)`
 
-        From the returned series derive and record:
-        - Average RPS over the window, and peak RPS with the timestamp of the peak.
-        - Request volume for each of the **last 4 complete weeks**, each with its date range.
-        - Week-over-week average RPS growth percentage between the last two complete weeks.
-        - P50, P95, P99 averages over the window, and the peak P99 value.
-        - HTTP error rate = errors / hits, both as a 28-day average and as the worst single day.
-        - Total container restarts, and whether any restart was an OOMKill.
+        Derive and record, from the daily buckets alone:
 
-        ## Group 2 — Datadog: resource saturation
+        - **Average RPS** = (sum of all 28 daily hit buckets) / 2419200.
+        - **Weekly volumes**: group the 28 daily hit buckets into 4 consecutive blocks of 7,
+          oldest first, and sum each block. Label each row with the date range of its own buckets,
+          taken from the bucket timestamps — `YYYY-MM-DD to YYYY-MM-DD`. This is **exactly 4 rows**;
+          no more and no fewer.
+        - **Week-over-week average RPS growth** = `(w4 - w3) / w3 × 100`, where `w3` and `w4` are the
+          third and fourth weekly volumes above (the two most recent weeks). Record it as a
+          percentage with its sign.
+        - **P50, P95 and P99 averages** = the mean of the corresponding `rollup(avg, 86400)` series.
+          Record them in milliseconds — `trace.undertow_http.request` is reported in **seconds**, so
+          ms = value × 1000.
+        - **Peak P99** = the largest point of the `rollup(max, 86400)` series, in milliseconds, with
+          the date of that bucket.
+        - **HTTP error rate, 28-day average** = (sum of all error buckets) / (sum of all hit
+          buckets) × 100, as a percentage.
+        - **HTTP error rate, worst single day** = the largest per-day `errors[i] / hits[i] × 100`,
+          with that bucket's date. When every error bucket is 0, the worst day is `0.0%` — say so
+          and give the date of any day; do not mark it `NOT_COLLECTED`.
+        - **Container restarts** = the sum of all restart buckets, plus the date of the worst bucket
+          if any is non-zero. Note whether any restart was an OOMKill; if this metric cannot
+          distinguish the reason, say that instead of inventing a count.
+
+        ## Group 2 — Datadog: peak RPS
+
+        Peak RPS needs a finer bucket than a day. One `query_metrics` call:
+
+        - `sum:trace.undertow_http.request.hits{env:{{ENV}},service:{{SERVICE}}}.as_count().rollup(sum, 3600)`
+
+        **Peak RPS** = (largest hourly bucket) / 3600, recorded with the timestamp of that bucket.
+
+        ## Group 3 — Datadog: resource saturation
 
         One `query_metrics` call with these expressions:
 
-        - `avg:kubernetes.cpu.usage.total{env:{{ENV}},service:{{SERVICE}}}`
-        - `max:kubernetes.cpu.usage.total{env:{{ENV}},service:{{SERVICE}}}`
-        - `avg:kubernetes.memory.working_set{env:{{ENV}},service:{{SERVICE}}}`
-        - `max:kubernetes.memory.working_set{env:{{ENV}},service:{{SERVICE}}}`
-        - `avg:kubernetes_state.deployment.replicas{env:{{ENV}},kube_deployment:{{SERVICE}}}`
-        - `max:kubernetes_state.deployment.replicas{env:{{ENV}},kube_deployment:{{SERVICE}}}`
+        - `avg:kubernetes.cpu.usage.total{env:{{ENV}},service:{{SERVICE}}}.rollup(avg, 86400)`
+        - `max:kubernetes.cpu.usage.total{env:{{ENV}},service:{{SERVICE}}}.rollup(max, 86400)`
+        - `avg:kubernetes.memory.working_set{env:{{ENV}},service:{{SERVICE}}}.rollup(avg, 86400)`
+        - `max:kubernetes.memory.working_set{env:{{ENV}},service:{{SERVICE}}}.rollup(max, 86400)`
+        - `avg:kubernetes_state.deployment.replicas{env:{{ENV}},kube_deployment:{{SERVICE}}}.rollup(avg, 86400)`
+        - `max:kubernetes_state.deployment.replicas{env:{{ENV}},kube_deployment:{{SERVICE}}}.rollup(max, 86400)`
 
         **Unit conversion is mandatory** — the later stage scores against percentages of the pod
         limits, so record both the raw value and the converted one:
         - `kubernetes.cpu.usage.total` is reported in **nanocores**. Cores = value / 1000000000.
+          A raw point in the millions therefore converts to thousandths of a core; a converted
+          figure of the order of 1e-9 cores means you used a rendered number instead of the raw one.
         - `kubernetes.memory.working_set` is reported in **bytes**. MiB = value / 1048576.
         - Percentages need the pod requests and limits, which this stage does not read. Record the
           raw and converted absolute values only, and state the unit explicitly next to each value.
 
-        ## Group 3 — Datadog: Kafka consumer lag
+        Record the average and the peak of each, and the date of each peak.
+
+        ## Group 4 — Datadog: Kafka consumer lag
 
         Skip if {{KAFKA_CONSUMER_GROUPS}} is N/A. Otherwise issue **one query per consumer group**
         (a comma-separated tag value is an AND filter in Datadog and would return nothing):
 
-        `max:kafka.consumer_lag{env:{{ENV}},consumer_group:<group>} by {topic}`
+        `max:kafka.consumer_lag{env:{{ENV}},consumer_group:<group>} by {topic}.rollup(max, 86400)`
 
-        Record, per group and topic: 28-day average lag and peak lag, both in messages.
+        One series comes back per topic; read the topic from each series' `scope` or `tagSet`.
+        Record, per group and topic: 28-day average lag, peak lag and the date of the peak, all in
+        messages.
 
-        ## Group 4 — Datadog: database metrics
+        ## Group 5 — Datadog: database metrics
 
         Skip the MySQL expressions if {{MYSQL_HOST}} is N/A, and the MongoDB ones if
         {{ATLAS_CLUSTER}} is N/A. Otherwise one `query_metrics` call with the applicable expressions:
 
-        - `avg:azure.dbformysql_flexibleservers.active_connections{name:{{MYSQL_HOST}}}`
-        - `max:azure.dbformysql_flexibleservers.active_connections{name:{{MYSQL_HOST}}}`
-        - `sum:azure.dbformysql_flexibleservers.slow_queries{name:{{MYSQL_HOST}}}.as_count()`
-        - `max:azure.dbformysql_flexibleservers.replication_lag{name:{{MYSQL_HOST}}-*}`
-        - `avg:mongodb.atlas.oplatencies.reads.avg{clustername:{{ATLAS_CLUSTER}}}`
-        - `avg:mongodb.atlas.oplatencies.writes.avg{clustername:{{ATLAS_CLUSTER}}}`
-        - `max:mongodb.atlas.oplatencies.reads.avg{clustername:{{ATLAS_CLUSTER}}}`
-        - `max:mongodb.atlas.connections.current{clustername:{{ATLAS_CLUSTER}}}`
-        - `sum:mongodb.atlas.metrics.queryexecutor.scannedperreturned{clustername:{{ATLAS_CLUSTER}}}`
+        - `avg:azure.dbformysql_flexibleservers.active_connections{name:{{MYSQL_HOST}}}.rollup(avg, 86400)`
+        - `max:azure.dbformysql_flexibleservers.active_connections{name:{{MYSQL_HOST}}}.rollup(max, 86400)`
+        - `sum:azure.dbformysql_flexibleservers.slow_queries{name:{{MYSQL_HOST}}}.as_count().rollup(sum, 86400)`
+        - `max:azure.dbformysql_flexibleservers.replication_lag{name:{{MYSQL_HOST}}-*}.rollup(max, 86400)`
+        - `avg:mongodb.atlas.oplatencies.reads.avg{clustername:{{ATLAS_CLUSTER}}}.rollup(avg, 86400)`
+        - `avg:mongodb.atlas.oplatencies.writes.avg{clustername:{{ATLAS_CLUSTER}}}.rollup(avg, 86400)`
+        - `max:mongodb.atlas.oplatencies.reads.avg{clustername:{{ATLAS_CLUSTER}}}.rollup(max, 86400)`
+        - `max:mongodb.atlas.connections.current{clustername:{{ATLAS_CLUSTER}}}.rollup(max, 86400)`
+        - `sum:mongodb.atlas.metrics.queryexecutor.scannedperreturned{clustername:{{ATLAS_CLUSTER}}}.rollup(sum, 86400)`
 
-        Record averages and peaks, plus the slow-query daily average and the worst single day.
+        Record, each with the date of its peak bucket:
+        - Active connections: 28-day average and peak.
+        - Slow queries: daily average = (sum of all buckets) / 28, and the worst single day.
+        - Replication lag: 28-day average and peak, in seconds.
+        - MongoDB read/write latencies, connections and scanned-per-returned, where applicable.
 
-        ## Group 5 — Datadog: SLOs and monitors
+        ## Group 6 — Datadog: monitors
 
-        Call `list_monitors` (and `list_slos` if the server exposes it) filtered to
-        `service:{{SERVICE}}`. Record every monitor in ALERT or WARN state with its name and state,
-        and the compliance figure of each SLO. If there are none, write `None in ALERT or WARN`.
+        Call `get_monitors` with `groupStates = ["alert", "warn"]` and
+        `tags = ["service:{{SERVICE}}"]`. Record every monitor returned with its name and state; if
+        the list is empty, write `None in ALERT or WARN`.
 
-        ## Group 6 — Azure MCP: live resource configuration
+        This Datadog MCP server exposes **no SLO tool**, so do not go looking for one: write
+        `NOT_COLLECTED: Datadog MCP exposes no SLO tool` for SLO compliance and move on.
+
+        ## Group 7 — Azure MCP: live resource configuration
 
         Skip entirely only if the service uses no Azure-managed resource.
 
@@ -142,28 +226,22 @@ public class MetricCollectionTaskPrompt {
         - `get_aks_node_pools(cluster=<cluster name>, resource_group=<rg>)` — per pool: node SKU,
           min/max node count, spot vs on-demand.
 
-        On failure write `NOT_COLLECTED: Azure MCP error — <reason>`.
+        The Azure MCP server needs a live corporate network connection and an unexpired credential.
+        On failure write `NOT_COLLECTED: Azure MCP error — <reason>` once per affected value and
+        move on; do not retry the same call.
 
-        ## Group 7 — MySQL MCP: table storage
+        ## Group 8 — MySQL table storage: already collected
 
-        Execute only if both {{MYSQL_HOST}} and {{MYSQL_DB}} are not N/A. Use the MCP server named
-        **{{MYSQL_MCP}}** and run exactly one query:
+        **Do not query MySQL and do not look for a MySQL MCP server.** The pipeline collects table
+        storage itself over JDBC, before this stage runs, and has already written it to:
 
-        ```sql
-        SELECT
-            table_name,
-            table_rows,
-            ROUND(data_length / 1024 / 1024, 2)   AS data_mb,
-            ROUND(index_length / 1024 / 1024, 2)  AS index_mb,
-            ROUND((data_length + index_length) / 1024 / 1024, 2) AS total_mb
-        FROM information_schema.tables
-        WHERE table_schema = '{{MYSQL_DB}}'
-        ORDER BY (data_length + index_length) DESC
-        LIMIT 20;
-        ```
+        `{{MYSQL_TABLES_PATH}}`
 
-        Record all 20 rows as a table and flag every table above 10 GB. On failure write
-        `NOT_COLLECTED: MySQL MCP error — <reason>`.
+        Read that file with the read tool and copy its body verbatim into Section 9 of your output,
+        keeping the `[Source: ...]` annotations it already carries. It holds either the top-20
+        table or a single `NOT_COLLECTED:` line; either way, reproduce what it says rather than
+        re-deriving it. Take `largest_table_gb` for the JSON snapshot from its largest row
+        (total MB / 1024), or `null` when the file reports `NOT_COLLECTED`.
 
         ---
 
@@ -175,7 +253,7 @@ public class MetricCollectionTaskPrompt {
         ```markdown
         # Collected Metrics — {{SERVICE}} ({{ENV}})
         **Collected At**: <YYYY-MM-DD HH:mm zone>
-        **Lookback**: 28 days
+        **Lookback**: 28 days (<from date> to <to date>, UTC day-aligned)
 
         ## 1. Traffic & Throughput
         ## 2. Latency Profile
@@ -189,6 +267,9 @@ public class MetricCollectionTaskPrompt {
         ## 10. Collection Gaps
         ## 11. Metrics Snapshot (JSON)
         ```
+
+        Section 1 contains the average RPS, the peak RPS with its timestamp, the week-over-week
+        growth percentage, and the 4-row weekly volume table.
 
         Section 10 lists every `NOT_COLLECTED` item with its reason, or `None`.
 

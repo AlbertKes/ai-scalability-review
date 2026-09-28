@@ -38,30 +38,58 @@ class LocalReviewPromptBuilderTest {
         params.mysqlDb = "wonder_cart";
         params.atlasCluster = null;
         params.kafkaConsumerGroups = null;
+        params.mysqlTablesPath = "/out/mysql-tables.md";
         params.outputPath = "/out/metrics.md";
 
         String prompt = LocalReviewPromptBuilder.buildMetricCollectionPrompt(params);
 
         assertThat(prompt).doesNotContain("{{")
             .contains("**Environment**: prod")
-            .contains("rfprodv2-flexible-wonder-db-wonder_cart")
+            .contains("rfprodv2-flexible-wonder-db.mysql.database.azure.com")
             .contains("/out/metrics.md")
             .contains("**Atlas MongoDB cluster**: N/A");
     }
 
+    /**
+     * The table sizes are collected by the pipeline, not by an MCP server, so the stage must be told
+     * to read the file rather than to look for a MySQL tool — see MySQLTableStorageService.
+     */
     @Test
-    void metricCollectionPromptNamesNoMysqlMcpWhenTheDatabaseIsAbsent() {
+    void metricCollectionPromptPointsAtTheLocallyCollectedMysqlTables() {
         MetricCollectionParams params = new MetricCollectionParams();
         params.serviceId = "ba-web-api";
         params.env = "prod";
         params.namespace = "prod-ba";
         params.mysqlHost = "N/A";
         params.mysqlDb = "N/A";
+        params.mysqlTablesPath = "/out/mysql-tables.md";
         params.outputPath = "/out/metrics.md";
 
         assertThat(LocalReviewPromptBuilder.buildMetricCollectionPrompt(params))
             .doesNotContain("{{")
-            .contains("not configured for this service");
+            .contains("/out/mysql-tables.md")
+            .contains("Do not query MySQL and do not look for a MySQL MCP server");
+    }
+
+    /** Every per-window figure has to be rolled up, both to be derivable and to keep the response small. */
+    @Test
+    void metricCollectionPromptRollsUpTheDatadogQueries() {
+        MetricCollectionParams params = new MetricCollectionParams();
+        params.serviceId = "wonder-cart-service";
+        params.env = "uat";
+        params.namespace = "uat-consumer";
+        params.mysqlHost = "N/A";
+        params.mysqlDb = "N/A";
+        params.mysqlTablesPath = "/out/mysql-tables.md";
+        params.outputPath = "/out/metrics.md";
+
+        assertThat(LocalReviewPromptBuilder.buildMetricCollectionPrompt(params))
+            .contains(".as_count().rollup(sum, 86400)")
+            .contains(".as_count().rollup(sum, 3600)")
+            .contains("`to - 2419200`")
+            .contains("epoch milliseconds")
+            .contains("get_monitors")
+            .doesNotContain("list_monitors");
     }
 
     @Test
@@ -90,20 +118,7 @@ class LocalReviewPromptBuilderTest {
 
     @Test
     void validationPromptCarriesTheThresholdsAndFormatsItChecksAgainst() {
-        ValidationPromptParams params = new ValidationPromptParams();
-        params.serviceId = "wonder-cart-service";
-        params.reviewReportPath = "/out/2026-09-23-review.md";
-        params.infraContextPath = "/out/infra-context.md";
-        params.localInfraRepoPath = "/infra";
-        params.env = "prod";
-        params.namespace = "prod-consumer";
-        params.mysqlHost = "db-host";
-        params.mysqlDb = "wonder_cart";
-        params.atlasCluster = null;
-        params.kafkaConsumerGroups = "wonder-cart-service";
-        params.outputPath = "/out/2026-09-23-validation.md";
-
-        String prompt = LocalReviewPromptBuilder.buildValidationPrompt(params);
+        String prompt = LocalReviewPromptBuilder.buildValidationPrompt(validationParams());
 
         assertThat(prompt).doesNotContain("{{")
             .doesNotContain("ai-scalability-review-service/src/main/java")
@@ -111,15 +126,70 @@ class LocalReviewPromptBuilderTest {
             .contains("## Report Format Reference")
             .contains("## Validation Format Reference")
             .contains("@/out/2026-09-23-review.md")
+            .contains("/out/mysql-tables.md")
             .contains("/out/2026-09-23-validation.md");
     }
 
+    /**
+     * Check 8 re-verifies each recommendation against the primary source, so the validation stage has
+     * to be pointed at the application repository as well as the infra one.
+     */
     @Test
-    void mysqlMcpNameStripsTheDomainAndHandlesAbsentValues() {
-        assertThat(LocalReviewPromptBuilder.mysqlMcpName("host.mysql.database.azure.com", "order")).isEqualTo("host-order");
-        assertThat(LocalReviewPromptBuilder.mysqlMcpName("host", "order")).isEqualTo("host-order");
-        assertThat(LocalReviewPromptBuilder.mysqlMcpName("N/A", "order")).isNull();
-        assertThat(LocalReviewPromptBuilder.mysqlMcpName("host", null)).isNull();
+    void validationPromptChecksRecommendationSoundnessAgainstBothRepositories() {
+        ValidationPromptParams params = validationParams();
+
+        assertThat(LocalReviewPromptBuilder.buildValidationPrompt(params))
+            .doesNotContain("{{")
+            .contains("Check 8 — Recommendation Soundness")
+            .contains("Execute all 8 checks")
+            .contains("/app-repo")
+            .contains("/infra");
+    }
+
+    /** A validation run triggered without the application repository must still resolve every placeholder. */
+    @Test
+    void validationPromptToleratesAMissingApplicationRepository() {
+        ValidationPromptParams params = validationParams();
+        params.localAppRepoPath = null;
+
+        assertThat(LocalReviewPromptBuilder.buildValidationPrompt(params))
+            .doesNotContain("{{")
+            .contains("not provided");
+    }
+
+    /** The synthesis stage has to be told the rules Check 8 will hold its recommendations to. */
+    @Test
+    void reviewPromptCarriesTheRecommendationSoundnessRules() {
+        assertThat(LocalReviewPromptBuilder.buildReviewPrompt(reviewParams()))
+            .contains("Cite the primary source, not the context file")
+            .contains("No recommendation built on a metric that was not collected")
+            .contains("Do not recommend what already exists");
+    }
+
+    @Test
+    void mysqlConnectionNameStripsTheDomainAndHandlesAbsentValues() {
+        assertThat(LocalReviewPromptBuilder.mysqlConnectionName("host.mysql.database.azure.com", "order")).isEqualTo("host-order");
+        assertThat(LocalReviewPromptBuilder.mysqlConnectionName("host", "order")).isEqualTo("host-order");
+        assertThat(LocalReviewPromptBuilder.mysqlConnectionName("N/A", "order")).isNull();
+        assertThat(LocalReviewPromptBuilder.mysqlConnectionName("host", null)).isNull();
+    }
+
+    private ValidationPromptParams validationParams() {
+        ValidationPromptParams params = new ValidationPromptParams();
+        params.serviceId = "wonder-cart-service";
+        params.reviewReportPath = "/out/2026-09-23-review.md";
+        params.infraContextPath = "/out/infra-context.md";
+        params.localInfraRepoPath = "/infra";
+        params.localAppRepoPath = "/app-repo";
+        params.env = "prod";
+        params.namespace = "prod-consumer";
+        params.mysqlHost = "db-host";
+        params.mysqlDb = "wonder_cart";
+        params.atlasCluster = null;
+        params.kafkaConsumerGroups = "wonder-cart-service";
+        params.mysqlTablesPath = "/out/mysql-tables.md";
+        params.outputPath = "/out/2026-09-23-validation.md";
+        return params;
     }
 
     private ReviewPromptParams reviewParams() {

@@ -39,7 +39,7 @@ public class MySQLTableStage {
     public void execute(ReviewContext context) throws Exception {
         ServiceConfig config = context.config;
         if (Strings.isBlank(config.runtime.mysqlHost) || Strings.isBlank(config.runtime.mysqlDB)) {
-            context.mysqlTableData = "NOT_COLLECTED: MySQL MCP not configured (mysqlHost or mysqlDb is empty)";
+            context.mysqlTableData = "NOT_COLLECTED: MySQL not configured (mysqlHost or mysqlDb is empty)";
             return;
         }
         String mysqlUser = System.getenv("MYSQL_USER");
@@ -47,7 +47,7 @@ public class MySQLTableStage {
         String mysqlPort = System.getenv("MYSQL_PORT");
         if (mysqlPort == null || mysqlPort.isBlank()) mysqlPort = "3306";
         if (mysqlUser == null || mysqlPassword == null) {
-            context.mysqlTableData = "NOT_COLLECTED: MySQL MCP error — MYSQL_USER or MYSQL_PASSWORD not configured";
+            context.mysqlTableData = "NOT_COLLECTED: MySQL error — MYSQL_USER or MYSQL_PASSWORD not configured";
             return;
         }
         String jdbcUrl = "jdbc:mysql://" + config.runtime.mysqlHost + ':' + mysqlPort
@@ -82,7 +82,7 @@ public class MySQLTableStage {
     private StringBuilder buildTableHeader(ServiceConfig config) {
         return new StringBuilder(2048)
                 .append("## MySQL Table Size Analysis\n\n```\n")
-                .append("-- [Source: MySQL MCP (").append(config.runtime.mysqlHost).append('-').append(config.runtime.mysqlDB).append(") \u2192\n")
+                .append("-- [Source: MySQL (").append(config.runtime.mysqlHost).append('/').append(config.runtime.mysqlDB).append(") \u2192\n")
                 .append("SELECT table_name, table_rows, ROUND(data_length/1024/1024,2) AS data_mb,\n")
                 .append("       ROUND(index_length/1024/1024,2) AS index_mb,\n")
                 .append("       ROUND((data_length+index_length)/1024/1024,2) AS total_mb\n")
@@ -116,7 +116,7 @@ public class MySQLTableStage {
         }
         tableData.append("\n**Total (top ").append(tableCount).append(" tables)**: ")
                 .append(String.format("%.2f GB", totalMb / 1024))
-                .append(" `[Source: MySQL MCP (").append(config.runtime.mysqlHost).append('-').append(config.runtime.mysqlDB)
+                .append(" `[Source: MySQL (").append(config.runtime.mysqlHost).append('/').append(config.runtime.mysqlDB)
                 .append(") → SELECT SUM(data_length+index_length) FROM information_schema.tables WHERE table_schema='")
                 .append(config.runtime.mysqlDB).append("']`\n");
         return new int[]{tableCount};
@@ -125,7 +125,7 @@ public class MySQLTableStage {
     private StringBuilder handleException(ReviewContext context, SQLException e, long startMs, ServiceConfig config) {
         StringBuilder tableData;
         long durationMs = System.currentTimeMillis() - startMs;
-        String msg = "NOT_COLLECTED: MySQL MCP error — " + e.getMessage();
+        String msg = "NOT_COLLECTED: MySQL error — " + e.getMessage();
         tableData = new StringBuilder(msg);
 
         auditLogService.log(new AuditLogService.AuditLogParam(context.job.jobId, config.serviceId,

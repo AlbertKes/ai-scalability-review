@@ -120,6 +120,15 @@ public class LocalReviewPromptBuilder {
         tool. `{{INFRA_CONTEXT_PATH}}` lists which files the review stage was given and which were
         skipped, so start there when you need to locate a cited file. Read only the files you
         actually need in order to verify a claim.
+
+        **Application repository root** (for re-verifying claims about the service's own code):
+        Local path: `{{APP_REPO_PATH}}`
+
+        Check 8 needs this one. A claim annotated `[Source: context -> code-context.md]` was written
+        by an earlier model stage and is not evidence of itself, so re-read the class, migration SQL,
+        module registration or property file under this root before accepting or rejecting it. Search
+        for the symbol the report names rather than browsing — the repository is large, and a whole
+        directory read would cost more than the check is worth.
         """;
 
     private static final String VALIDATION_OUTPUT_CONTRACT = """
@@ -149,6 +158,10 @@ public class LocalReviewPromptBuilder {
         return outputDir + "/metrics.md";
     }
 
+    public static String mysqlTablesPath(String outputDir) {
+        return outputDir + "/mysql-tables.md";
+    }
+
     public static String reportSnapshotPath(String outputDir) {
         return outputDir + "/report-snapshot.json";
     }
@@ -166,11 +179,15 @@ public class LocalReviewPromptBuilder {
     }
 
     /**
-     * Name of the locally configured MySQL MCP server for a host/database pair, e.g.
+     * Key under which a host/database pair is configured in {@code ~/.gemini/settings.json}, e.g.
      * {@code ftiuat-flexible-consumer-db} + {@code order} gives
      * {@code ftiuat-flexible-consumer-db-order}. Returns null when the service has no MySQL database.
+     *
+     * <p>No stage starts that server any more — Gemini CLI 0.46 cannot read a row-returning MySQL
+     * MCP response (see {@link app.aiscalabilityreview.service.MySQLTableStorageService}) — but its
+     * entry is still where the local connection details live, so the name is resolved the same way.
      */
-    public static String mysqlMcpName(String mysqlHost, String mysqlDb) {
+    public static String mysqlConnectionName(String mysqlHost, String mysqlDb) {
         if (isAbsent(mysqlHost) || isAbsent(mysqlDb)) return null;
         int dot = mysqlHost.indexOf('.');
         String host = dot > 0 ? mysqlHost.substring(0, dot) : mysqlHost;
@@ -193,14 +210,13 @@ public class LocalReviewPromptBuilder {
 
     /** Stage 3 — metric collection. The only stage that reaches an MCP server. */
     public static String buildMetricCollectionPrompt(MetricCollectionParams p) {
-        String mysqlMcp = mysqlMcpName(p.mysqlHost, p.mysqlDb);
         return MetricCollectionTaskPrompt.CONTENT
             .replace("{{SERVICE}}", p.serviceId)
             .replace("{{ENV}}", lower(p.env))
             .replace("{{NAMESPACE}}", p.namespace)
             .replace("{{MYSQL_HOST}}", nvl(p.mysqlHost, NOT_AVAILABLE))
             .replace("{{MYSQL_DB}}", nvl(p.mysqlDb, NOT_AVAILABLE))
-            .replace("{{MYSQL_MCP}}", mysqlMcp == null ? "not configured for this service" : mysqlMcp)
+            .replace("{{MYSQL_TABLES_PATH}}", p.mysqlTablesPath)
             .replace("{{ATLAS_CLUSTER}}", nvl(p.atlasCluster, NOT_AVAILABLE))
             .replace("{{KAFKA_CONSUMER_GROUPS}}", nvl(p.kafkaConsumerGroups, NOT_AVAILABLE))
             .replace("{{OUTPUT_PATH}}", p.outputPath);
@@ -248,7 +264,9 @@ public class LocalReviewPromptBuilder {
             .replace("{{ATLAS_CLUSTER}}", nvl(p.atlasCluster, NOT_AVAILABLE))
             .replace("{{KAFKA_CONSUMER_GROUPS}}", nvl(p.kafkaConsumerGroups, NOT_AVAILABLE))
             .replace("{{INFRA_REPO_PATH}}", nvl(p.localInfraRepoPath, "not provided"))
+            .replace("{{APP_REPO_PATH}}", nvl(p.localAppRepoPath, "not provided"))
             .replace("{{INFRA_CONTEXT_PATH}}", p.infraContextPath)
+            .replace("{{MYSQL_TABLES_PATH}}", p.mysqlTablesPath)
             .replace("{{OUTPUT_PATH}}", p.outputPath);
     }
 
@@ -283,6 +301,7 @@ public class LocalReviewPromptBuilder {
         public String mysqlDb;
         public String atlasCluster;
         public String kafkaConsumerGroups;
+        public String mysqlTablesPath;
         public String outputPath;
     }
 
@@ -307,12 +326,14 @@ public class LocalReviewPromptBuilder {
         public String reviewReportPath;
         public String infraContextPath;
         public String localInfraRepoPath;
+        public String localAppRepoPath;
         public String env;
         public String namespace;
         public String mysqlHost;
         public String mysqlDb;
         public String atlasCluster;
         public String kafkaConsumerGroups;
+        public String mysqlTablesPath;
         public String outputPath;
     }
 }

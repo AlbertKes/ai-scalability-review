@@ -73,5 +73,8 @@ configure(
 project("ai-scalability-review-service") {
     dependencies {
         implementation(project(":ai-scalability-review-service-interface"))
+        // the review queries information_schema over JDBC; the MySQL MCP server cannot be used,
+        // see MySQLTableStorageService
+        implementation("com.mysql:mysql-connector-j")
     }
 }

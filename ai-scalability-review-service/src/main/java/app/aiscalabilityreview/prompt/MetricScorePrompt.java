@@ -125,14 +125,14 @@ public class MetricScorePrompt {
         | **Missing indexes on high-frequency query columns** | None found | 1 missing | ≥ 2 missing |
         | **DB storage used — absolute (GB)** when auto-grow is ON (Azure MCP) | < 100 GB | 100 – 500 GB | > 500 GB |
         | **DB storage used — % of provisioned** when auto-grow is OFF (Azure MCP) | < 50 % | 50 % – 75 % | > 75 % |
-        | **Largest single table size** (MySQL MCP) | < 5 GB | 5 – 10 GB | > 10 GB |
-        | **Number of tables > 10 GB** (MySQL MCP) | 0 | 1 | ≥ 2 |
+        | **Largest single table size** (MySQL) | < 5 GB | 5 – 10 GB | > 10 GB |
+        | **Number of tables > 10 GB** (MySQL) | 0 | 1 | ≥ 2 |
         
-        > **Note on MySQL table size metrics**: these are collected only when the MySQL MCP is available
-        > (i.e., both `MYSQL_HOST` and `MYSQL_DB` are set). If the MySQL MCP was not run, omit these rows
-        > from scoring — do **not** default them to RED for a missing MCP; only mark RED if the MCP ran
-        > and the threshold was exceeded. If the MCP was skipped (not configured), note
-        > `NOT_COLLECTED: MySQL MCP not configured` and exclude from dimension scoring.
+        > **Note on MySQL table size metrics**: the pipeline queries `information_schema` over JDBC and
+        > only when both `MYSQL_HOST` and `MYSQL_DB` are set. If the query did not run, omit these rows
+        > from scoring — do **not** default them to RED for missing data; only mark RED if the query ran
+        > and the threshold was exceeded. If it was skipped (not configured), note
+        > `NOT_COLLECTED: MySQL not configured` and exclude from dimension scoring.
         
         ### MongoDB Atlas
         
@@ -163,7 +163,7 @@ public class MetricScorePrompt {
         | Latency & Thread Concurrency | P99 average & peak | P99 avg > 500 ms **or** missing circuit breakers on critical path |
         | Error Rates & Stability | HTTP error rate, restarts | Any restart = YELLOW; error rate > 1 % = RED |
         | Resource Saturation | Peak CPU/mem % of limit | Peak CPU > 90 % limit **or** HPA effective trigger (`averageUtilization × request/limit`) ≥ 86 % of limit |
-        | Persistence Layer | Connections %, slow queries, replication lag, storage % (Azure MCP), largest table (MySQL MCP) | Connections > 85 % limit **or** replication lag peak > 60 s **or** storage > 75 % **or** any table > 10 GB |
+        | Persistence Layer | Connections %, slow queries, replication lag, storage % (Azure MCP), largest table (MySQL) | Connections > 85 % limit **or** replication lag peak > 60 s **or** storage > 75 % **or** any table > 10 GB |
             """;
     }
 }

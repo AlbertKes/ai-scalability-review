@@ -43,7 +43,7 @@ public class ValidationFormatPrompt {
         
         ## 2. Validation Summary Table
         
-        A single table summarizing the result of all 7 checks. Always include all 7 rows.
+        A single table summarizing the result of all 8 checks. Always include all 8 rows.
         
         ```markdown
         ## Validation Summary
@@ -57,6 +57,7 @@ public class ValidationFormatPrompt {
         | 5 | Capacity Projection Math | PASS / FAIL / WARNING / SKIPPED | <n> issue(s) |
         | 6 | NOT_COLLECTED Authenticity | PASS / FAIL / WARNING / SKIPPED | <n> issue(s) |
         | 7 | Format & Attribution Completeness | PASS / FAIL / WARNING / SKIPPED | <n> issue(s) |
+        | 8 | Recommendation Soundness | PASS / FAIL / WARNING / SKIPPED | <n> issue(s) |
         ```
         
         **Row-level status rules**:
@@ -69,7 +70,7 @@ public class ValidationFormatPrompt {
         
         ## 3. Check Results
         
-        Output one section per check in the fixed order below. Always include all 7 sections.
+        Output one section per check in the fixed order below. Always include all 8 sections.
         Use "Status: SKIPPED — <reason>" for inapplicable checks (e.g., MySQL checks when MYSQL_HOST is N/A).
         
         ```markdown
@@ -110,6 +111,7 @@ public class ValidationFormatPrompt {
         ## Check 5 — Capacity Projection Math: <STATUS>
         ## Check 6 — NOT_COLLECTED Authenticity: <STATUS>
         ## Check 7 — Format & Attribution Completeness: <STATUS>
+        ## Check 8 — Recommendation Soundness: <STATUS>
         ```
         
         ---
@@ -132,6 +134,8 @@ public class ValidationFormatPrompt {
         - **[Check 1]** HPA maxReplicas overstated: report says 20, actual is 15.
         - **[Check 4]** Dimension 5 score: report says YELLOW, but cited metrics compute to RED
           (MySQL connection avg 78% > 75% RED threshold).
+        - **[Check 8]** Recommendation 5 is false: the semaphore it says was disabled is active with
+          5 permits in every environment (`app.semaphore.permits=5`).
         
         ### Warnings
         *(List all WARNING findings in brief. Omit this section if there are no warnings.)*
@@ -139,6 +143,8 @@ public class ValidationFormatPrompt {
         - **[Check 2]** Peak RPS differs by 22% (report: 340 RPS, current: 278 RPS); within tolerance
           but notable given the 28-day window rolled.
         - **[Check 5]** +4Q growth factor rounding: report 1.612×, computed 1.608× (0.2% off).
+        - **[Check 8]** Recommendation 6 is half-implemented already: the handler does dispatch per
+          user over Kafka, so only the unbounded fetch of the whole user list remains actionable.
         
         ### Validation Notes
         *(General observations about data source availability, temporal context, or review quality.)*
@@ -150,8 +156,8 @@ public class ValidationFormatPrompt {
         
         ```markdown
         ---
-        *Validation performed by independently re-querying Datadog MCP, Azure MCP, MySQL MCP, and
-        code repositories against the claims in the original report.*
+        *Validation performed by independently re-querying Datadog MCP and Azure MCP, and re-reading the
+        pipeline's MySQL table data and the code repositories, against the claims in the original report.*
         *Metric tolerances applied: ±20% for 28-day averages, ±30% for peaks (rolling window drift).*
         *Config tolerances: exact match for static config; ±10 GB or ±10% for dynamic storage values.*
         ```
@@ -162,8 +168,9 @@ public class ValidationFormatPrompt {
         
         Before finalizing the validation report, confirm:
         
-        - [ ] All 7 check sections are present in the correct order
-        - [ ] Validation Summary table has exactly 7 rows
+        - [ ] All 8 check sections are present in the correct order
+        - [ ] Validation Summary table has exactly 8 rows
+        - [ ] Check 8 reports one finding per recommendation, including the ones that passed
         - [ ] Every finding includes: Reported value, Actual value with `[Source: ...]`, and Detail
         - [ ] No finding is left without a STATUS tag
         - [ ] Overall Verdict matches the highest-severity finding (FAIL > WARNING > PASS)

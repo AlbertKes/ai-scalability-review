@@ -22,6 +22,7 @@ import app.aiscalabilityreview.service.DatadogService;
 import app.aiscalabilityreview.service.GeminiCliService;
 import app.aiscalabilityreview.service.GitHubService;
 import app.aiscalabilityreview.service.InfraContextService;
+import app.aiscalabilityreview.service.MySQLTableStorageService;
 import app.aiscalabilityreview.service.LocalReviewService;
 import app.aiscalabilityreview.service.ReviewJobService;
 import app.aiscalabilityreview.service.ReviewReportService;
@@ -55,6 +56,7 @@ public class ReviewModule extends Module {
         bind(ReviewReportService.class);
         bind(new GeminiCliService(requiredProperty("app.gemini.cloud.project"), requiredProperty("app.gemini.cloud.location")));
         bind(InfraContextService.class);
+        bind(MySQLTableStorageService.class);
     }
 
     private void bindStageExecutors() {

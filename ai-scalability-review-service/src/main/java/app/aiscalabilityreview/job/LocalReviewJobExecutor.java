@@ -14,6 +14,8 @@ import app.aiscalabilityreview.service.GeminiCliService.GeminiRunResult;
 import app.aiscalabilityreview.service.GeminiModels;
 import app.aiscalabilityreview.service.InfraContextService;
 import app.aiscalabilityreview.service.InfraContextService.InfraContextParams;
+import app.aiscalabilityreview.service.MySQLTableStorageService;
+import app.aiscalabilityreview.service.MySQLTableStorageService.MySQLTableParams;
 import app.aiscalabilityreview.service.ReviewService;
 import app.aiscalabilityreview.service.builder.LocalReviewReportBuilder;
 import app.aiscalabilityreview.service.builder.LocalReviewReportBuilder.LocalReportParams;
@@ -27,7 +29,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -44,7 +45,8 @@ import java.util.regex.Pattern;
  * costs multiply:
  * <ol>
  *   <li><b>code analysis</b> — reads the application source, no MCP server.</li>
- *   <li><b>infra context</b> — runs in this service, selects the relevant infra files, zero tokens.</li>
+ *   <li><b>infra context</b> — runs in this service, selects the relevant infra files and queries
+ *       the MySQL table sizes over JDBC, zero tokens.</li>
  *   <li><b>metric collection</b> — the only stage with MCP servers; small context, many tool calls,
  *       cheapest model.</li>
  *   <li><b>synthesis</b> — large context, no tool calls, no MCP servers; does the scoring.</li>
@@ -60,6 +62,13 @@ public class LocalReviewJobExecutor {
 
     private static final String DATADOG_MCP = "datadog";
     private static final String AZURE_MCP = "azure";
+    /**
+     * The data stages query Datadog and Azure only. The MySQL MCP server is deliberately absent:
+     * Gemini CLI 0.46 cannot read a row-returning response from it (see
+     * {@link MySQLTableStorageService}), so the table sizes are collected in stage 2 instead and
+     * leaving the server out of the allowlist means it is neither started nor described to the model.
+     */
+    private static final List<String> DATA_MCP = List.of(DATADOG_MCP, AZURE_MCP);
     private static final List<String> NO_MCP = List.of(GeminiCliService.MCP_DISABLED);
 
     private static final int CODE_ANALYSIS_TIMEOUT_MINUTES = 15;
@@ -87,6 +96,8 @@ public class LocalReviewJobExecutor {
     GeminiCliService geminiCliService;
     @Inject
     InfraContextService infraContextService;
+    @Inject
+    MySQLTableStorageService mysqlTableStorageService;
 
     public void registerRequest(String jobId, GenerateLocalReviewRequest request) {
         pendingRequests.put(jobId, request);
@@ -114,6 +125,7 @@ public class LocalReviewJobExecutor {
             LocalReviewPromptBuilder.codeContextPath(outputDir),
             LocalReviewPromptBuilder.infraContextPath(outputDir),
             LocalReviewPromptBuilder.metricsPath(outputDir),
+            LocalReviewPromptBuilder.mysqlTablesPath(outputDir),
             LocalReviewPromptBuilder.reviewReportPath(outputDir, today),
             LocalReviewPromptBuilder.validationReportPath(outputDir, today),
             LocalReviewPromptBuilder.reportSnapshotPath(outputDir));
@@ -165,9 +177,13 @@ public class LocalReviewJobExecutor {
     }
 
     private void runInfraContextStage(String jobId, GenerateLocalReviewRequest request, OutputPaths paths, LocalReviewRunStats stats) {
-        runLocalStage(jobId, STAGE_INFRA_CONTEXT, stats, () ->
-            infraContextService.build(new InfraContextParams(request.localInfraRepoPath, request.env, request.domain,
-                request.service, request.mysqlHost, request.atlasCluster, paths.infraContext())));
+        runLocalStage(jobId, STAGE_INFRA_CONTEXT, stats, () -> {
+            String infraSummary = infraContextService.build(new InfraContextParams(request.localInfraRepoPath, request.env,
+                request.domain, request.service, request.mysqlHost, request.atlasCluster, paths.infraContext()));
+            String mysqlSummary = mysqlTableStorageService.collect(
+                new MySQLTableParams(request.mysqlHost, request.mysqlDB, paths.mysqlTables()));
+            return infraSummary + " | " + mysqlSummary;
+        });
     }
 
     private void runMetricCollectionStage(String jobId, GenerateLocalReviewRequest request, OutputPaths paths, LocalReviewRunStats stats) {
@@ -181,10 +197,11 @@ public class LocalReviewJobExecutor {
             params.mysqlDb = request.mysqlDB;
             params.atlasCluster = request.atlasCluster;
             params.kafkaConsumerGroups = request.kafkaConsumerGroups;
+            params.mysqlTablesPath = paths.mysqlTables();
             params.outputPath = paths.metrics();
             return geminiCliService.run(new GeminiRunRequest(
                 LocalReviewPromptBuilder.buildMetricCollectionPrompt(params), model,
-                List.of(paths.outputDir()), dataMcpServers(request), METRIC_COLLECTION_TIMEOUT_MINUTES));
+                List.of(paths.outputDir()), DATA_MCP, METRIC_COLLECTION_TIMEOUT_MINUTES));
         });
     }
 
@@ -223,16 +240,19 @@ public class LocalReviewJobExecutor {
             params.reviewReportPath = paths.reviewReport();
             params.infraContextPath = paths.infraContext();
             params.localInfraRepoPath = request.localInfraRepoPath;
+            params.localAppRepoPath = request.localAppRepoPath;
             params.env = request.env;
             params.namespace = request.namespace;
             params.mysqlHost = request.mysqlHost;
             params.mysqlDb = request.mysqlDB;
             params.atlasCluster = request.atlasCluster;
             params.kafkaConsumerGroups = request.kafkaConsumerGroups;
+            params.mysqlTablesPath = paths.mysqlTables();
             params.outputPath = paths.validationReport();
             GeminiRunResult result = geminiCliService.run(new GeminiRunRequest(
                 LocalReviewPromptBuilder.buildValidationPrompt(params), model,
-                List.of(paths.outputDir(), request.localInfraRepoPath), dataMcpServers(request), VALIDATION_TIMEOUT_MINUTES));
+                List.of(paths.outputDir(), request.localInfraRepoPath, request.localAppRepoPath),
+                DATA_MCP, VALIDATION_TIMEOUT_MINUTES));
             logger.info("Validation verdict for job {}: {}", jobId, verdict(readFileQuietly(paths.validationReport())));
             return result;
         });
@@ -252,16 +272,6 @@ public class LocalReviewJobExecutor {
         } catch (IOException e) {
             logger.warn("Could not write the code context placeholder to {}: {}", path, e.getMessage());
         }
-    }
-
-    /** Only the MCP servers the data stages actually query, so the rest are neither started nor described to the model. */
-    private List<String> dataMcpServers(GenerateLocalReviewRequest request) {
-        List<String> servers = new ArrayList<>(3);
-        servers.add(DATADOG_MCP);
-        servers.add(AZURE_MCP);
-        String mysqlMcp = LocalReviewPromptBuilder.mysqlMcpName(request.mysqlHost, request.mysqlDB);
-        if (mysqlMcp != null) servers.add(mysqlMcp);
-        return servers;
     }
 
     private void runGeminiStage(String jobId, String stageName, boolean fatal, LocalReviewRunStats stats, GeminiStageAction action) {
@@ -380,6 +390,7 @@ public class LocalReviewJobExecutor {
                                String codeContext,
                                String infraContext,
                                String metrics,
+                               String mysqlTables,
                                String reviewReport,
                                String validationReport,
                                String reportSnapshot) {

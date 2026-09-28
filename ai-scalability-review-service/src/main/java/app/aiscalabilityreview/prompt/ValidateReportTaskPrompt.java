@@ -4,7 +4,8 @@ public class ValidateReportTaskPrompt {
     /**
      * Validation task prompt.
      * Placeholders: {{REPORT_FILE}}, {{SERVICE}}, {{ENV}}, {{NAMESPACE}},
-     * {{MYSQL_HOST}}, {{MYSQL_DB}}, {{ATLAS_CLUSTER}}, {{KAFKA_CONSUMER_GROUPS}}
+     * {{MYSQL_HOST}}, {{MYSQL_DB}}, {{ATLAS_CLUSTER}}, {{KAFKA_CONSUMER_GROUPS}},
+     * {{MYSQL_TABLES_PATH}}, {{INFRA_REPO_PATH}}, {{APP_REPO_PATH}}
      */
     public static final String CONTENT;
 
@@ -29,6 +30,19 @@ public class ValidateReportTaskPrompt {
         - **MySQL database**: {{MYSQL_DB}}  (N/A if MYSQL_HOST is N/A)
         - **Atlas MongoDB cluster**: {{ATLAS_CLUSTER}}  (N/A if service does not use MongoDB)
         - **Kafka consumer groups**: {{KAFKA_CONSUMER_GROUPS}}  (comma-separated, or "N/A")
+        - **MySQL table storage**: collected by the pipeline over JDBC into `{{MYSQL_TABLES_PATH}}`.
+          There is no MySQL MCP server in this run; re-read that file instead of querying the database.
+
+        ## Re-querying Datadog
+
+        The report's 28-day figures come from a day-aligned window: `to` = today's 00:00 UTC in epoch
+        seconds, `from` = `to - 2419200`. Use the same window, and the same `.rollup(<aggregator>,
+        86400)` suffix the report's query annotation shows, or your values will not be comparable.
+
+        `query_metrics` returns `series[].pointlist` as `[[<epoch_milliseconds>, <value>], ...]`.
+        Averages, peaks, worst days, per-week totals **and the timestamp of any peak** are all
+        arithmetic over that array — a report that marks one of them `NOT_COLLECTED` because the tool
+        "does not support" it is asserting something false, and Check 6 must fail it.
 
         ---
 
@@ -246,6 +260,11 @@ public class ValidateReportTaskPrompt {
         - MySQL metrics when `{{MYSQL_HOST}}` is N/A
         - MongoDB metrics when `{{ATLAS_CLUSTER}}` is N/A
 
+        **Never legitimate** (always FAIL, no re-query needed): a reason that claims the derivation
+        itself was impossible rather than the query — "complex data derivation", "beyond current
+        capabilities", "does not support timestamp extraction", or any variant. The data was returned;
+        only the arithmetic was skipped.
+
         **Temporal note**: If the report is >30 days old and a metric is now available that may not
         have been at generation time, mark WARNING rather than FAIL.
 
@@ -287,8 +306,9 @@ public class ValidateReportTaskPrompt {
         ### 7d — MySQL sub-table presence
 
         If both `{{MYSQL_HOST}}` and `{{MYSQL_DB}}` are not N/A: verify the MySQL table storage
-        sub-table is present in the Infrastructure Configuration section. Missing → FAIL, unless the
-        report marks the MySQL MCP query as `NOT_COLLECTED`, in which case → WARNING.
+        sub-table is present in the Infrastructure Configuration section and matches
+        `{{MYSQL_TABLES_PATH}}`. Missing → FAIL, unless that file itself reports `NOT_COLLECTED`, in
+        which case → WARNING.
         If either is N/A: verify the sub-table is absent. Present → WARNING.
 
         ### 7e — Weekly volume count
@@ -344,12 +364,82 @@ public class ValidateReportTaskPrompt {
 
         ---
 
+        ## Check 8 — Recommendation Soundness
+
+        Checks 1–7 verify that the report's *data* is right. This check verifies that its **advice**
+        is right, which is what a reader actually acts on. Take every entry of
+        "Recommendations & Action Items" **and** every numbered bullet of the Executive Summary's
+        critical-findings list — they restate the same claims, so a false finding has to be flagged in
+        both places.
+
+        Do not accept a recommendation because it sounds sensible. Each one is a factual claim about
+        this codebase plus a proposed change; verify both.
+
+        **Procedure** — run all six tests below on each recommendation, in order:
+
+        **8a — Premise.** Re-verify the **Finding** against the primary source, not against the
+        report. A finding annotated `[Source: context → code-context.md]` is *not* verified by
+        reading `code-context.md`: that file is itself model output from an earlier stage, so it can
+        carry the same error. Read the actual file under `{{APP_REPO_PATH}}` or `{{INFRA_REPO_PATH}}`
+        — the class, the migration SQL, the module registration, the property file — and quote what
+        it says. Premise contradicted by the source → **FAIL**. Premise true but its
+        stated severity overstated or understated → **WARNING**, and say which way.
+
+        **8b — Evidence.** If the finding rests on a metric the report itself marks
+        `NOT_COLLECTED`, the recommendation is unfounded → **FAIL**. The only sound recommendation
+        that can be built on a missing metric is "collect it" — a recommendation that instead asserts
+        a risk, or prescribes a change sized to the number it does not have, is asserting something
+        it cannot know.
+
+        **8c — Already done.** Check whether the proposed **Action** is already implemented. Search
+        the repository for the mechanism the action asks for — the config call, the annotation, the
+        property, the Redis key, the index, the Kafka publish — before accepting that it is missing.
+        Action wholly present already → **FAIL** (the recommendation is noise that costs a reviewer
+        real time). Action partly present, so that only a narrower change remains → **WARNING**, and
+        state the part that is already covered.
+
+        **8d — Every number traceable.** Each numeric target in the Action (a timeout in ms, a
+        connection limit, a batch size, a replica count, a threshold) must come from either a
+        collected metric, an existing value in this codebase, or a documented platform default, and
+        the recommendation must say which. A target that appears from nowhere → **FAIL**. Prefer a
+        number the codebase already uses for the same purpose: if the sibling clients in the same
+        module use 5000 ms, a recommendation of 5000 ms is traceable and one of 2000 ms is not.
+
+        **8e — Direction.** Confirm the change moves the metric the right way. Re-read the current
+        value of whatever the action proposes to set, and compare. A proposed ceiling that is
+        **below** the value already in force is a regression dressed as a fix → **FAIL**. This is the
+        common failure for capacity limits, where the platform default is far larger than the number
+        the report guesses at.
+
+        **8f — Scope.** Confirm the metric that motivates the recommendation is actually scoped to
+        this service. A shared-resource metric — `azure.dbformysql_flexibleservers.*` is per
+        **server**, not per application, and one flexible server hosts every service in the domain —
+        describes all of its tenants at once. Attributing it to this service alone, or sizing this
+        service's change by it, → **WARNING** at minimum; **FAIL** if the recommendation's whole
+        premise is that this service caused the number.
+
+        Finally, for each recommendation that survives, check **proportionality**: the
+        `(High Priority)` / `(Medium Priority)` / `(Low Priority)` marker must match the strength of
+        the verified evidence. A High marked on an unverified or shared-resource premise →
+        **WARNING**.
+
+        **Report one finding per recommendation**, naming it by number and title, with `Reported:` =
+        the finding as the report states it and `Actual:` = what the primary source says, sourced. A
+        recommendation that passes all six tests is a **PASS** finding — still list it, so the reader
+        can tell verified advice from unchecked advice.
+
+        A recommendation that is factually false or already implemented is worse than a missing one,
+        because it spends engineering time and discredits the rest of the report. Prefer FAIL over
+        WARNING when the source contradicts the finding.
+
+        ---
+
         ## Output
 
         Produce a complete validation report following the format defined in the
         **Validation Format Reference** section below.
 
-        Execute all 7 checks before writing the output. Do not omit any check —
+        Execute all 8 checks before writing the output. Do not omit any check —
         use STATUS: SKIPPED for checks not applicable to this service.
         Every finding must include a concrete reported value, actual value, and source.
             """;
