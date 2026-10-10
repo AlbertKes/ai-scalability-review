@@ -1,5 +1,6 @@
 package app.aiscalabilityreview.service;
 
+import app.aiscalabilityreview.api.localreview.GenerateLocalReviewRequest;
 import app.aiscalabilityreview.domain.ReportComparison;
 import app.aiscalabilityreview.domain.ReviewFeedback;
 import app.aiscalabilityreview.domain.ReviewJob;
@@ -7,8 +8,10 @@ import app.aiscalabilityreview.domain.ReviewReport;
 import app.aiscalabilityreview.domain.ServiceConfig;
 import app.aiscalabilityreview.domain.ValidationResult;
 import app.aiscalabilityreview.domain.embedded.AIModel;
+import app.aiscalabilityreview.service.builder.LocalReviewRequestMapper;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.Sorts;
+import com.mongodb.client.model.Updates;
 import core.framework.inject.Inject;
 import core.framework.mongo.MongoCollection;
 import core.framework.mongo.Query;
@@ -70,29 +73,105 @@ public class ReviewService {
     }
 
     /**
-     * Create a ReviewJob for a local (Gemini CLI) review run.
-     * Does not require a ServiceConfig to exist in MongoDB.
+     * Creates a ReviewJob for a local (Gemini CLI) review run. Does not require a ServiceConfig.
      *
-     * @param serviceId   service being reviewed
-     * @param triggeredBy identifier of who triggered the run (e.g. serviceId or "api")
-     * @param model       model the run's synthesis stage will use
+     * <p>The trigger request is stored on the job rather than held in memory: that is what lets the
+     * console say what a run looked at, repeat it, and recognise a run that a restart abandoned.
+     *
      * @return the new job ID
      */
-    public String createLocalReviewJob(String serviceId, String triggeredBy, AIModel model) {
+    public String createLocalReviewJob(LocalReviewJobParams params) {
         ReviewJob job = new ReviewJob();
         job.jobId = UUID.randomUUID().toString();
-        job.serviceId = serviceId;
+        job.serviceId = params.request().service;
         job.triggerType = "MANUAL";
-        job.triggeredBy = triggeredBy;
-        job.aiModel = model;
-        job.status = "PENDING";
+        job.triggeredBy = params.request().operator;
+        job.aiModel = params.model();
+        job.status = ReviewJob.STATUS_PENDING;
         job.startedAt = ZonedDateTime.now();
         job.stageStatuses = new LinkedHashMap<>();
+        job.env = params.request().env;
+        job.namespace = params.request().namespace;
+        job.domain = params.request().domain;
+        job.request = LocalReviewRequestMapper.toSnapshot(params.request());
+        job.labels = params.request().labels;
+        job.acknowledgedWarnings = params.request().acknowledgedWarnings;
+        job.retryOfJobId = params.retryOfJobId();
+        job.retryFromStage = params.retryFromStage();
+        job.baseline = Boolean.FALSE;
 
         reviewJobCollection.insert(job);
-        logger.info("Created local review job {} for service {}", job.jobId, serviceId);
+        logger.info("Created local review job {} for service {}", job.jobId, job.serviceId);
         return job.jobId;
     }
+
+    public void updateJob(ReviewJob job) {
+        reviewJobCollection.replace(job);
+    }
+
+    public void deleteJob(String jobId) {
+        reviewJobCollection.delete(jobId);
+    }
+
+    /** Marks a run as waiting for a concurrency slot, so the list can show it as queued. */
+    public void markQueued(String jobId) {
+        ReviewJob job = reviewJobCollection.get(jobId).orElse(null);
+        if (job == null) return;
+        job.status = ReviewJob.STATUS_QUEUED;
+        reviewJobCollection.replace(job);
+    }
+
+    public void cancelJob(String jobId, String cancelledBy) {
+        ReviewJob job = reviewJobCollection.get(jobId).orElse(null);
+        if (job == null) return;
+        job.status = ReviewJob.STATUS_CANCELLED;
+        job.cancelledAt = ZonedDateTime.now();
+        job.cancelledBy = cancelledBy;
+        job.completedAt = job.cancelledAt;
+        reviewJobCollection.replace(job);
+    }
+
+    /**
+     * Marks a run whose process no longer exists. Used at startup: a job left RUNNING by a restart
+     * has no one behind it, and a spinner that never resolves is worse than an honest dead end.
+     */
+    public void markStale(ReviewJob job, String reason) {
+        job.status = ReviewJob.STATUS_STALE;
+        job.errorMessage = reason;
+        job.completedAt = ZonedDateTime.now();
+        reviewJobCollection.replace(job);
+    }
+
+    /** Only one run per service can be the baseline, so setting one clears the rest. */
+    public void clearBaseline(String serviceId) {
+        reviewJobCollection.update(
+            Filters.and(Filters.eq("service_id", serviceId), Filters.eq("baseline", Boolean.TRUE)),
+            Updates.set("baseline", Boolean.FALSE));
+    }
+
+    /** Removes a run and everything derived from it, so a deleted run leaves no orphan documents. */
+    public void deleteRunData(ReviewJob job) {
+        validationResultCollection.delete(Filters.eq("job_id", job.jobId));
+        reviewReportCollection.delete(Filters.eq("job_id", job.jobId));
+        reviewJobCollection.delete(job.jobId);
+        logger.info("Deleted review job {} and its derived documents", job.jobId);
+    }
+
+    public List<ReviewJob> listJobsByService(String serviceId, int limit) {
+        Query query = new Query();
+        query.filter = Filters.eq("service_id", serviceId);
+        query.sort = Sorts.descending("started_at");
+        query.limit = limit;
+        return reviewJobCollection.find(query);
+    }
+
+    public List<ReviewFeedback> listFeedbackByReport(String reportId) {
+        Query query = new Query();
+        query.filter = Filters.eq("report_id", reportId);
+        query.sort = Sorts.descending("created_at");
+        return reviewFeedbackCollection.find(query);
+    }
+
 
     public Optional<ReviewJob> getReviewJob(String jobId) {
         return reviewJobCollection.get(jobId);
@@ -237,5 +316,15 @@ public class ReviewService {
         );
         query.sort = Sorts.descending("generated_at");
         return reviewReportCollection.find(query);
+    }
+
+    /**
+     * @param retryOfJobId  the run this one repeats, or null for a fresh run
+     * @param retryFromStage first stage to actually execute; earlier stages reuse the source run
+     */
+    public record LocalReviewJobParams(GenerateLocalReviewRequest request,
+                                       AIModel model,
+                                       String retryOfJobId,
+                                       String retryFromStage) {
     }
 }

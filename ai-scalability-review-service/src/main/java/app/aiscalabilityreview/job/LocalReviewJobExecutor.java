@@ -1,24 +1,27 @@
 package app.aiscalabilityreview.job;
 
 import app.aiscalabilityreview.api.localreview.GenerateLocalReviewRequest;
+import app.aiscalabilityreview.domain.ReviewJob;
 import app.aiscalabilityreview.domain.ReviewJob.StageStatus;
 import app.aiscalabilityreview.domain.ReviewReport;
 import app.aiscalabilityreview.exception.FatalStageException;
+import app.aiscalabilityreview.job.LocalReviewRunRegistry.RunHandle;
+import app.aiscalabilityreview.job.LocalReviewStageRunner.StageInput;
 import app.aiscalabilityreview.prompt.LocalReviewPromptBuilder;
 import app.aiscalabilityreview.prompt.LocalReviewPromptBuilder.MetricCollectionParams;
 import app.aiscalabilityreview.prompt.LocalReviewPromptBuilder.ReviewPromptParams;
 import app.aiscalabilityreview.prompt.LocalReviewPromptBuilder.ValidationPromptParams;
+import app.aiscalabilityreview.service.AppSettingsService;
 import app.aiscalabilityreview.service.GeminiCliService;
 import app.aiscalabilityreview.service.GeminiCliService.GeminiRunRequest;
-import app.aiscalabilityreview.service.GeminiCliService.GeminiRunResult;
 import app.aiscalabilityreview.service.GeminiModels;
+import app.aiscalabilityreview.service.GitRepoInspector;
 import app.aiscalabilityreview.service.InfraContextService;
 import app.aiscalabilityreview.service.InfraContextService.InfraContextParams;
 import app.aiscalabilityreview.service.MySQLTableStorageService;
 import app.aiscalabilityreview.service.MySQLTableStorageService.MySQLTableParams;
 import app.aiscalabilityreview.service.ReviewService;
-import app.aiscalabilityreview.service.builder.LocalReviewReportBuilder;
-import app.aiscalabilityreview.service.builder.LocalReviewReportBuilder.LocalReportParams;
+import app.aiscalabilityreview.service.builder.LocalReviewRequestMapper;
 import core.framework.inject.Inject;
 import core.framework.util.Strings;
 import org.slf4j.Logger;
@@ -27,18 +30,14 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.ZonedDateTime;
+import java.nio.file.StandardCopyOption;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
- * Orchestrates the local review stages using the local Gemini CLI. Outputs are written to disk under
- * the configured output directory, and job status is tracked in the ReviewJob + ReviewReport
- * MongoDB collections.
+ * Orchestrates the local review stages using the local Gemini CLI. Outputs are written to disk in a
+ * directory of this run's own, and job status is tracked in the ReviewJob + ReviewReport MongoDB
+ * collections.
  *
  * <p>The run is split so that no single model turn carries both a large context and a long tool
  * loop (AD-6383) — in an agentic loop the whole context is re-sent on every round-trip, so those two
@@ -52,13 +51,14 @@ import java.util.regex.Pattern;
  *   <li><b>synthesis</b> — large context, no tool calls, no MCP servers; does the scoring.</li>
  *   <li><b>validation</b> — independent re-check, optional.</li>
  * </ol>
+ *
+ * <p>The request comes from the job document rather than from memory, so a restart cannot strand a
+ * run, and every run writes into {@link LocalReviewOutputPaths#runDir} rather than into a directory
+ * shared by every run of the service.
  */
 public class LocalReviewJobExecutor {
-    private static final String STAGE_CODE_ANALYSIS = "STAGE_1_CODE_ANALYSIS";
-    private static final String STAGE_INFRA_CONTEXT = "STAGE_2_INFRA_CONTEXT";
-    private static final String STAGE_METRIC_COLLECTION = "STAGE_3_METRIC_COLLECTION";
-    private static final String STAGE_SYNTHESIS = "STAGE_4_SYNTHESIS";
-    private static final String STAGE_VALIDATION = "STAGE_5_VALIDATION";
+    /** Bumped whenever the prompt templates change, so two runs can be told apart (FR-6.7). */
+    public static final String PROMPT_VERSION = "AD-6385";
 
     private static final String DATADOG_MCP = "datadog";
     private static final String AZURE_MCP = "azure";
@@ -75,20 +75,12 @@ public class LocalReviewJobExecutor {
     private static final int METRIC_COLLECTION_TIMEOUT_MINUTES = 20;
     private static final int SYNTHESIS_TIMEOUT_MINUTES = 15;
     private static final int VALIDATION_TIMEOUT_MINUTES = 20;
+    private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
-    private static final Pattern VERDICT_PATTERN = Pattern.compile("(?i)Overall Validation Verdict:\\s*\\**\\s*([A-Z ]+)");
     private static final String CODE_CONTEXT_PLACEHOLDER =
         "Code context: not available — the code analysis stage was skipped for this run.\n";
 
-    public static String resolveOutputDir(GenerateLocalReviewRequest request) {
-        String base = !Strings.isBlank(request.outputBaseDir) ? request.outputBaseDir : "reports";
-        return base + "/" + request.service;
-    }
-
     private final Logger logger = LoggerFactory.getLogger(LocalReviewJobExecutor.class);
-
-    // Holds request params for async execution, keyed by jobId.
-    private final Map<String, GenerateLocalReviewRequest> pendingRequests = new ConcurrentHashMap<>();
 
     @Inject
     ReviewService reviewService;
@@ -98,86 +90,208 @@ public class LocalReviewJobExecutor {
     InfraContextService infraContextService;
     @Inject
     MySQLTableStorageService mysqlTableStorageService;
-
-    public void registerRequest(String jobId, GenerateLocalReviewRequest request) {
-        pendingRequests.put(jobId, request);
-    }
+    @Inject
+    LocalReviewStageRunner stageRunner;
+    @Inject
+    LocalReviewRunFinalizer finalizer;
+    @Inject
+    LocalReviewRunRegistry registry;
+    @Inject
+    AppSettingsService appSettingsService;
+    @Inject
+    GitRepoInspector gitRepoInspector;
 
     public void executeLocalReview(String jobId) {
-        GenerateLocalReviewRequest request = pendingRequests.remove(jobId);
-        if (request == null) {
-            logger.error("No request registered for local review job {}", jobId);
-            reviewService.failJob(jobId, "No request params found for job " + jobId);
+        ReviewJob job = reviewService.getReviewJob(jobId).orElse(null);
+        if (job == null || job.request == null) {
+            logger.error("No stored request for local review job {}", jobId);
+            reviewService.failJob(jobId, "No request found for job " + jobId);
+            return;
+        }
+        GenerateLocalReviewRequest request = LocalReviewRequestMapper.toRequest(job.request);
+        RunHandle handle = registry.register(jobId, job.serviceId);
+        if (!awaitSlot(jobId)) {
+            registry.unregister(jobId);
             return;
         }
 
-        String outputDir = Path.of(resolveOutputDir(request)).toAbsolutePath().toString();
-        logger.info("Starting local review job {} (service={}, outputDir={})", jobId, request.service, outputDir);
+        LocalReviewArtifactPaths paths;
         try {
-            Files.createDirectories(Path.of(outputDir));
+            paths = prepare(job, request);
         } catch (IOException e) {
-            reviewService.failJob(jobId, "Failed to create output directory: " + e.getMessage());
+            reviewService.failJob(jobId, "Failed to create the run directory: " + e.getMessage());
+            releaseRun(jobId);
             return;
         }
 
-        String today = ZonedDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
-        OutputPaths paths = new OutputPaths(outputDir,
-            LocalReviewPromptBuilder.codeContextPath(outputDir),
-            LocalReviewPromptBuilder.infraContextPath(outputDir),
-            LocalReviewPromptBuilder.metricsPath(outputDir),
-            LocalReviewPromptBuilder.mysqlTablesPath(outputDir),
-            LocalReviewPromptBuilder.reviewReportPath(outputDir, today),
-            LocalReviewPromptBuilder.validationReportPath(outputDir, today),
-            LocalReviewPromptBuilder.reportSnapshotPath(outputDir));
         LocalReviewRunStats stats = new LocalReviewRunStats();
-
         try {
-            runStages(jobId, request, paths, stats);
+            runStages(job, request, paths, stats, handle);
+            ReviewReport report = finalizer.publishReport(job, paths,
+                GeminiModels.orDefault(request.synthesisModel, GeminiModels.SYNTHESIS_DEFAULT));
+            reviewService.completeJob(jobId, report.reportId);
+            logger.info("Local review job {} completed: reportId={}, outputDir={}", jobId, report.reportId, paths.runDir());
         } catch (FatalStageException e) {
-            logger.error("Fatal stage failure in local review job {} at {}: {}", jobId, e.stageName, e.getMessage());
-            reviewService.failJob(jobId, "Stage " + e.stageName + " failed: " + e.getCause().getMessage());
+            recordStop(jobId, request.operator, handle, e);
         } catch (Exception e) {
             logger.error("Unexpected error in local review job {}: {}", jobId, e.getMessage(), e);
             reviewService.failJob(jobId, "Unexpected error: " + e.getMessage());
         } finally {
-            reportRunStats(jobId, request.service, paths, stats);
+            finalizer.summarise(jobId, paths, stats);
+            finalizer.notifyOutcome(jobId);
+            releaseRun(jobId);
         }
     }
 
-    private void runStages(String jobId, GenerateLocalReviewRequest request, OutputPaths paths, LocalReviewRunStats stats) {
-        runCodeAnalysisStage(jobId, request, paths, stats);
-        runInfraContextStage(jobId, request, paths, stats);
-        runMetricCollectionStage(jobId, request, paths, stats);
-        runSynthesisStage(jobId, request, paths, stats);
-        runValidationStage(jobId, request, paths, stats);
-
-        String reviewMarkdown = readFileQuietly(paths.reviewReport());
-        ReviewReport report = LocalReviewReportBuilder.reviewReport(new LocalReportParams(jobId, request.service,
-            reviewMarkdown, paths.reviewReport(), readFileQuietly(paths.reportSnapshot()),
-            GeminiModels.orDefault(request.synthesisModel, GeminiModels.SYNTHESIS_DEFAULT)));
-        reviewService.saveReport(report);
-        reviewService.completeJob(jobId, report.reportId);
-        logger.info("Local review job {} completed: reportId={}, overallScore={}, outputDir={}",
-            jobId, report.reportId, report.overallScore, paths.outputDir());
+    private boolean awaitSlot(String jobId) {
+        Integer configured = appSettingsService.get().maxConcurrentRuns;
+        int limit = configured == null ? 1 : configured;
+        try {
+            reviewService.markQueued(jobId);
+            registry.acquireSlot(jobId, limit);
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            reviewService.failJob(jobId, "Interrupted while waiting for a run slot");
+            return false;
+        }
     }
 
-    private void runCodeAnalysisStage(String jobId, GenerateLocalReviewRequest request, OutputPaths paths, LocalReviewRunStats stats) {
+    private void recordStop(String jobId, String operator, RunHandle handle, FatalStageException e) {
+        if (handle.isCancelled()) {
+            logger.info("Local review job {} cancelled at {}", jobId, e.stageName);
+            reviewService.cancelJob(jobId, operator);
+        } else {
+            logger.error("Fatal stage failure in local review job {} at {}: {}", jobId, e.stageName, e.getMessage());
+            reviewService.failJob(jobId, "Stage " + e.stageName + " failed: " + causeMessage(e));
+        }
+    }
+
+    private void releaseRun(String jobId) {
+        registry.releaseSlot();
+        registry.unregister(jobId);
+    }
+
+    private String causeMessage(FatalStageException e) {
+        return e.getCause() == null ? e.getMessage() : e.getCause().getMessage();
+    }
+
+    /**
+     * Creates this run's own directory, records the reproducibility fingerprint and carries over the
+     * artifacts of any stages a retry is reusing.
+     */
+    private LocalReviewArtifactPaths prepare(ReviewJob job, GenerateLocalReviewRequest request) throws IOException {
+        String base = baseDir(request);
+        request.outputBaseDir = base;
+        String runDir = Path.of(LocalReviewOutputPaths.runDir(base, job.serviceId, job.startedAt, job.jobId))
+            .toAbsolutePath().toString();
+        Files.createDirectories(Path.of(runDir));
+        String today = DATE_FORMAT.format(job.startedAt);
+        LocalReviewArtifactPaths paths = new LocalReviewArtifactPaths(runDir,
+            LocalReviewPromptBuilder.codeContextPath(runDir),
+            LocalReviewPromptBuilder.infraContextPath(runDir),
+            LocalReviewPromptBuilder.metricsPath(runDir),
+            LocalReviewPromptBuilder.mysqlTablesPath(runDir),
+            LocalReviewPromptBuilder.reviewReportPath(runDir, today),
+            LocalReviewPromptBuilder.validationReportPath(runDir, today),
+            LocalReviewPromptBuilder.reportSnapshotPath(runDir));
+
+        job.outputDir = runDir;
+        job.request.outputBaseDir = base;
+        job.cliVersion = geminiCliService.version();
+        job.promptVersion = PROMPT_VERSION;
+        job.repoShaApp = gitRepoInspector.sha(request.localAppRepoPath);
+        job.repoShaInfra = gitRepoInspector.sha(request.localInfraRepoPath);
+        job.repoDirtyApp = gitRepoInspector.isDirty(request.localAppRepoPath);
+        job.repoDirtyInfra = gitRepoInspector.isDirty(request.localInfraRepoPath);
+        job.azureResourceGroup = azureResourceGroup(request);
+        reviewService.updateJob(job);
+
+        copyReusedArtifacts(job, runDir);
+        logger.info("Local review job {} writing to {}", job.jobId, runDir);
+        return paths;
+    }
+
+    private String baseDir(GenerateLocalReviewRequest request) {
+        if (!Strings.isBlank(request.outputBaseDir)) return request.outputBaseDir;
+        String configured = appSettingsService.get().outputBaseDir;
+        return Strings.isBlank(configured) ? "reports" : configured;
+    }
+
+    /**
+     * A retry runs in its own directory, so the stages it is not re-running must have their files
+     * brought across — otherwise the run would be missing the context those stages produced.
+     */
+    private void copyReusedArtifacts(ReviewJob job, String runDir) {
+        if (Strings.isBlank(job.retryOfJobId)) return;
+        ReviewJob source = reviewService.getReviewJob(job.retryOfJobId).orElse(null);
+        if (source == null || Strings.isBlank(source.outputDir) || source.stageStatuses == null) return;
+        int from = LocalReviewStages.indexOf(job.retryFromStage);
+        if (from < 0) return;
+        for (String stage : LocalReviewStages.ORDER.subList(0, from)) {
+            StageStatus status = source.stageStatuses.get(stage);
+            if (status == null || status.artifacts == null) continue;
+            status.artifacts.forEach(artifact -> copyQuietly(
+                Path.of(source.outputDir, artifact), Path.of(runDir, artifact)));
+        }
+    }
+
+    private void copyQuietly(Path from, Path to) {
+        try {
+            if (Files.isRegularFile(from)) Files.copy(from, to, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            logger.warn("Could not carry {} over to the retry run: {}", from, e.getMessage());
+        }
+    }
+
+    private void runStages(ReviewJob job, GenerateLocalReviewRequest request,
+                           LocalReviewArtifactPaths paths, LocalReviewRunStats stats, RunHandle handle) {
+        runCodeAnalysisStage(job, request, paths, stats, handle);
+        runInfraContextStage(job, request, paths, stats, handle);
+        runMetricCollectionStage(job, request, paths, stats, handle);
+        runSynthesisStage(job, request, paths, stats, handle);
+        runValidationStage(job, request, paths, stats, handle);
+    }
+
+    /** True when a retry starts later than this stage, so its output is reused rather than rebuilt. */
+    private boolean isReused(ReviewJob job, String stage) {
+        if (Strings.isBlank(job.retryFromStage)) return false;
+        return LocalReviewStages.indexOf(stage) < LocalReviewStages.indexOf(job.retryFromStage);
+    }
+
+    private void runCodeAnalysisStage(ReviewJob job, GenerateLocalReviewRequest request,
+                                      LocalReviewArtifactPaths paths, LocalReviewRunStats stats, RunHandle handle) {
+        String stage = LocalReviewStages.CODE_ANALYSIS;
+        if (isReused(job, stage)) {
+            stageRunner.skip(job.jobId, stage, "reused from run " + job.retryOfJobId);
+            return;
+        }
         if (Boolean.TRUE.equals(request.skipCodeAnalysis)) {
-            ensureCodeContextExists(paths.codeContext());
-            skipStage(jobId, STAGE_CODE_ANALYSIS, "skipped by request");
+            ensureCodeContextExists(request, job.serviceId, paths);
+            stageRunner.skip(job.jobId, stage, "skipped by request");
             return;
         }
         String model = GeminiModels.orDefault(request.codeAnalysisModel, GeminiModels.CODE_ANALYSIS_DEFAULT);
-        runGeminiStage(jobId, STAGE_CODE_ANALYSIS, true, stats, () -> {
+        StageInput input = new StageInput(job.jobId, stage, true, stats, paths.runDir(), handle,
+            List.of(LocalReviewOutputPaths.CODE_CONTEXT));
+        stageRunner.runGemini(input, context -> {
             String prompt = LocalReviewPromptBuilder.buildCodeAnalysisPrompt(
                 request.service, request.localAppRepoPath, request.appCodePaths, paths.codeContext());
             return geminiCliService.run(new GeminiRunRequest(prompt, model,
-                List.of(request.localAppRepoPath, paths.outputDir()), NO_MCP, CODE_ANALYSIS_TIMEOUT_MINUTES));
+                List.of(request.localAppRepoPath, paths.runDir()), NO_MCP, CODE_ANALYSIS_TIMEOUT_MINUTES), context);
         });
     }
 
-    private void runInfraContextStage(String jobId, GenerateLocalReviewRequest request, OutputPaths paths, LocalReviewRunStats stats) {
-        runLocalStage(jobId, STAGE_INFRA_CONTEXT, stats, () -> {
+    private void runInfraContextStage(ReviewJob job, GenerateLocalReviewRequest request,
+                                      LocalReviewArtifactPaths paths, LocalReviewRunStats stats, RunHandle handle) {
+        String stage = LocalReviewStages.INFRA_CONTEXT;
+        if (isReused(job, stage)) {
+            stageRunner.skip(job.jobId, stage, "reused from run " + job.retryOfJobId);
+            return;
+        }
+        StageInput input = new StageInput(job.jobId, stage, true, stats, paths.runDir(), handle,
+            List.of(LocalReviewOutputPaths.INFRA_CONTEXT, LocalReviewOutputPaths.MYSQL_TABLES));
+        stageRunner.runLocal(input, () -> {
             String infraSummary = infraContextService.build(new InfraContextParams(request.localInfraRepoPath, request.env,
                 request.domain, request.service, request.mysqlHost, request.atlasCluster, paths.infraContext()));
             String mysqlSummary = mysqlTableStorageService.collect(
@@ -186,9 +300,17 @@ public class LocalReviewJobExecutor {
         });
     }
 
-    private void runMetricCollectionStage(String jobId, GenerateLocalReviewRequest request, OutputPaths paths, LocalReviewRunStats stats) {
+    private void runMetricCollectionStage(ReviewJob job, GenerateLocalReviewRequest request,
+                                          LocalReviewArtifactPaths paths, LocalReviewRunStats stats, RunHandle handle) {
+        String stage = LocalReviewStages.METRIC_COLLECTION;
+        if (isReused(job, stage)) {
+            stageRunner.skip(job.jobId, stage, "reused from run " + job.retryOfJobId);
+            return;
+        }
         String model = GeminiModels.orDefault(request.metricCollectionModel, GeminiModels.METRIC_COLLECTION_DEFAULT);
-        runGeminiStage(jobId, STAGE_METRIC_COLLECTION, true, stats, () -> {
+        StageInput input = new StageInput(job.jobId, stage, true, stats, paths.runDir(), handle,
+            List.of(LocalReviewOutputPaths.METRICS));
+        stageRunner.runGemini(input, context -> {
             MetricCollectionParams params = new MetricCollectionParams();
             params.serviceId = request.service;
             params.env = request.env;
@@ -198,18 +320,26 @@ public class LocalReviewJobExecutor {
             params.atlasCluster = request.atlasCluster;
             params.kafkaConsumerGroups = request.kafkaConsumerGroups;
             params.mysqlTablesPath = paths.mysqlTables();
-            params.azureResourceGroup = azureResourceGroup(request);
+            params.azureResourceGroup = job.azureResourceGroup;
             params.azureSubscriptionId = firstSet(request.azureSubscriptionId, System.getenv("AZURE_SUBSCRIPTION_ID"));
             params.outputPath = paths.metrics();
             return geminiCliService.run(new GeminiRunRequest(
                 LocalReviewPromptBuilder.buildMetricCollectionPrompt(params), model,
-                List.of(paths.outputDir()), DATA_MCP, METRIC_COLLECTION_TIMEOUT_MINUTES));
+                List.of(paths.runDir()), DATA_MCP, METRIC_COLLECTION_TIMEOUT_MINUTES), context);
         });
     }
 
-    private void runSynthesisStage(String jobId, GenerateLocalReviewRequest request, OutputPaths paths, LocalReviewRunStats stats) {
+    private void runSynthesisStage(ReviewJob job, GenerateLocalReviewRequest request,
+                                   LocalReviewArtifactPaths paths, LocalReviewRunStats stats, RunHandle handle) {
+        String stage = LocalReviewStages.SYNTHESIS;
+        if (isReused(job, stage)) {
+            stageRunner.skip(job.jobId, stage, "reused from run " + job.retryOfJobId);
+            return;
+        }
         String model = GeminiModels.orDefault(request.synthesisModel, GeminiModels.SYNTHESIS_DEFAULT);
-        runGeminiStage(jobId, STAGE_SYNTHESIS, true, stats, () -> {
+        StageInput input = new StageInput(job.jobId, stage, true, stats, paths.runDir(), handle,
+            List.of(fileName(paths.reviewReport()), LocalReviewOutputPaths.REPORT_SNAPSHOT));
+        stageRunner.runGemini(input, context -> {
             ReviewPromptParams params = new ReviewPromptParams();
             params.serviceId = request.service;
             params.codeContextPath = paths.codeContext();
@@ -226,17 +356,21 @@ public class LocalReviewJobExecutor {
             params.snapshotPath = paths.reportSnapshot();
             return geminiCliService.run(new GeminiRunRequest(
                 LocalReviewPromptBuilder.buildReviewPrompt(params), model,
-                List.of(paths.outputDir()), NO_MCP, SYNTHESIS_TIMEOUT_MINUTES));
+                List.of(paths.runDir()), NO_MCP, SYNTHESIS_TIMEOUT_MINUTES), context);
         });
     }
 
-    private void runValidationStage(String jobId, GenerateLocalReviewRequest request, OutputPaths paths, LocalReviewRunStats stats) {
+    private void runValidationStage(ReviewJob job, GenerateLocalReviewRequest request,
+                                    LocalReviewArtifactPaths paths, LocalReviewRunStats stats, RunHandle handle) {
+        String stage = LocalReviewStages.VALIDATION;
         if (Boolean.TRUE.equals(request.skipValidation)) {
-            skipStage(jobId, STAGE_VALIDATION, "skipped by request");
+            stageRunner.skip(job.jobId, stage, "skipped by request");
             return;
         }
         String model = GeminiModels.orDefault(request.validationModel, GeminiModels.VALIDATION_DEFAULT);
-        runGeminiStage(jobId, STAGE_VALIDATION, false, stats, () -> {
+        StageInput input = new StageInput(job.jobId, stage, false, stats, paths.runDir(), handle,
+            List.of(fileName(paths.validationReport())));
+        stageRunner.runGemini(input, context -> {
             ValidationPromptParams params = new ValidationPromptParams();
             params.serviceId = request.service;
             params.reviewReportPath = paths.reviewReport();
@@ -251,28 +385,34 @@ public class LocalReviewJobExecutor {
             params.kafkaConsumerGroups = request.kafkaConsumerGroups;
             params.mysqlTablesPath = paths.mysqlTables();
             params.outputPath = paths.validationReport();
-            GeminiRunResult result = geminiCliService.run(new GeminiRunRequest(
+            return geminiCliService.run(new GeminiRunRequest(
                 LocalReviewPromptBuilder.buildValidationPrompt(params), model,
-                List.of(paths.outputDir(), request.localInfraRepoPath, request.localAppRepoPath),
-                DATA_MCP, VALIDATION_TIMEOUT_MINUTES));
-            logger.info("Validation verdict for job {}: {}", jobId, verdict(readFileQuietly(paths.validationReport())));
-            return result;
+                List.of(paths.runDir(), request.localInfraRepoPath, request.localAppRepoPath),
+                DATA_MCP, VALIDATION_TIMEOUT_MINUTES), context);
         });
     }
 
     /**
      * The synthesis prompt attaches the code context with an @file reference, so a skipped stage must
-     * still leave a readable file behind — a previous run's file is reused, otherwise a placeholder
-     * tells the synthesis stage the context is genuinely unavailable rather than silently empty.
+     * still leave a readable file behind. With one directory per run there is no fixed path to reuse,
+     * so the newest previous run of this service supplies it; failing that, a placeholder says the
+     * context is genuinely unavailable rather than silently empty.
      */
-    private void ensureCodeContextExists(String codeContextPath) {
-        Path path = Path.of(codeContextPath);
-        if (Files.exists(path)) return;
+    private void ensureCodeContextExists(GenerateLocalReviewRequest request, String serviceId,
+                                         LocalReviewArtifactPaths paths) {
+        Path target = Path.of(paths.codeContext());
+        if (Files.exists(target)) return;
+        String previous = LocalReviewOutputPaths.latestCodeContext(baseDir(request), serviceId, paths.runDir());
         try {
-            Files.writeString(path, CODE_CONTEXT_PLACEHOLDER);
-            logger.warn("No code context at {}; wrote a placeholder because code analysis was skipped", path);
+            if (previous != null) {
+                Files.copy(Path.of(previous), target, StandardCopyOption.REPLACE_EXISTING);
+                logger.info("Reusing the code context from {}", previous);
+            } else {
+                Files.writeString(target, CODE_CONTEXT_PLACEHOLDER);
+                logger.warn("No previous code context for {}; wrote a placeholder because code analysis was skipped", serviceId);
+            }
         } catch (IOException e) {
-            logger.warn("Could not write the code context placeholder to {}: {}", path, e.getMessage());
+            logger.warn("Could not prepare the code context at {}: {}", target, e.getMessage());
         }
     }
 
@@ -295,132 +435,14 @@ public class LocalReviewJobExecutor {
         return derived;
     }
 
+    private String fileName(String path) {
+        return String.valueOf(Path.of(path).getFileName());
+    }
+
     private String firstSet(String... values) {
         for (String value : values) {
             if (!Strings.isBlank(value)) return value;
         }
         return null;
-    }
-
-    private void runGeminiStage(String jobId, String stageName, boolean fatal, LocalReviewRunStats stats, GeminiStageAction action) {
-        StageStatus stageStatus = startStage(jobId, stageName);
-        long startMs = System.currentTimeMillis();
-        try {
-            GeminiRunResult result = action.execute();
-            stats.record(stageName, result);
-            stageStatus.model = result.model();
-            stageStatus.inputTokens = result.inputTokens();
-            stageStatus.outputTokens = result.outputTokens();
-            stageStatus.cachedTokens = result.cachedTokens();
-            stageStatus.totalTokens = result.totalTokens();
-            stageStatus.apiRequests = result.apiRequests();
-            stageStatus.toolCalls = result.toolCalls();
-            stageStatus.mcpToolCalls = result.mcpToolCalls();
-            completeStage(jobId, stageName, stageStatus, startMs);
-        } catch (Exception e) {
-            failStage(jobId, stageName, stageStatus, startMs, e);
-            if (fatal) throw new FatalStageException(stageName, e);
-        }
-    }
-
-    private void runLocalStage(String jobId, String stageName, LocalReviewRunStats stats, LocalStageAction action) {
-        StageStatus stageStatus = startStage(jobId, stageName);
-        long startMs = System.currentTimeMillis();
-        try {
-            stageStatus.outputSummary = action.execute();
-            stats.recordLocal(stageName, System.currentTimeMillis() - startMs);
-            completeStage(jobId, stageName, stageStatus, startMs);
-        } catch (Exception e) {
-            failStage(jobId, stageName, stageStatus, startMs, e);
-            throw new FatalStageException(stageName, e);
-        }
-    }
-
-    private StageStatus startStage(String jobId, String stageName) {
-        reviewService.updateJobStatus(jobId, "RUNNING", stageName);
-        StageStatus stageStatus = new StageStatus();
-        stageStatus.status = "RUNNING";
-        stageStatus.startedAt = ZonedDateTime.now();
-        reviewService.updateJobStageStatus(jobId, stageName, stageStatus);
-        return stageStatus;
-    }
-
-    private void completeStage(String jobId, String stageName, StageStatus stageStatus, long startMs) {
-        stageStatus.status = "COMPLETED";
-        stageStatus.completedAt = ZonedDateTime.now();
-        stageStatus.durationMs = System.currentTimeMillis() - startMs;
-        reviewService.updateJobStageStatus(jobId, stageName, stageStatus);
-        logger.info("Stage {} completed in {}ms for job {} (model={}, inputTokens={}, outputTokens={}, mcpToolCalls={})",
-            stageName, stageStatus.durationMs, jobId, stageStatus.model, stageStatus.inputTokens,
-            stageStatus.outputTokens, stageStatus.mcpToolCalls);
-    }
-
-    private void failStage(String jobId, String stageName, StageStatus stageStatus, long startMs, Exception e) {
-        stageStatus.status = "FAILED";
-        stageStatus.completedAt = ZonedDateTime.now();
-        stageStatus.durationMs = System.currentTimeMillis() - startMs;
-        stageStatus.errorMessage = e.getMessage();
-        reviewService.updateJobStageStatus(jobId, stageName, stageStatus);
-        logger.error("Stage {} failed after {}ms for job {}: {}", stageName, stageStatus.durationMs, jobId, e.getMessage());
-    }
-
-    private void skipStage(String jobId, String stageName, String reason) {
-        logger.info("Skipping {} for job {}: {}", stageName, jobId, reason);
-        StageStatus skipped = new StageStatus();
-        skipped.status = "SKIPPED";
-        skipped.startedAt = ZonedDateTime.now();
-        skipped.completedAt = skipped.startedAt;
-        skipped.durationMs = 0L;
-        skipped.outputSummary = reason;
-        reviewService.updateJobStageStatus(jobId, stageName, skipped);
-    }
-
-    private void reportRunStats(String jobId, String serviceId, OutputPaths paths, LocalReviewRunStats stats) {
-        if (stats.withinBudget()) {
-            logger.info("Local review job {} cost: {}", jobId, stats.summaryLine());
-        } else {
-            logger.warn("Local review job {} exceeded the cost/latency budget: {}", jobId, stats.summaryLine());
-        }
-        Path statsPath = Path.of(LocalReviewPromptBuilder.runStatsPath(paths.outputDir()));
-        try {
-            Files.writeString(statsPath, stats.render(serviceId, jobId));
-        } catch (IOException e) {
-            logger.warn("Could not write run stats to {}: {}", statsPath, e.getMessage());
-        }
-    }
-
-    private String verdict(String validationMarkdown) {
-        if (validationMarkdown == null) return "unknown";
-        Matcher matcher = VERDICT_PATTERN.matcher(validationMarkdown);
-        return matcher.find() ? matcher.group(1).trim() : "unknown";
-    }
-
-    private String readFileQuietly(String path) {
-        try {
-            return Files.readString(Path.of(path).toAbsolutePath());
-        } catch (IOException e) {
-            logger.warn("Could not read file {}: {}", path, e.getMessage());
-            return "";
-        }
-    }
-
-    @FunctionalInterface
-    private interface GeminiStageAction {
-        GeminiRunResult execute() throws Exception;
-    }
-
-    @FunctionalInterface
-    private interface LocalStageAction {
-        String execute() throws Exception;
-    }
-
-    private record OutputPaths(String outputDir,
-                               String codeContext,
-                               String infraContext,
-                               String metrics,
-                               String mysqlTables,
-                               String reviewReport,
-                               String validationReport,
-                               String reportSnapshot) {
     }
 }

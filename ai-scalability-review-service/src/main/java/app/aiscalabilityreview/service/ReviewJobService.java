@@ -9,7 +9,8 @@ import app.aiscalabilityreview.api.review.TriggerReviewResponse;
 import app.aiscalabilityreview.domain.ReviewJob;
 import app.aiscalabilityreview.domain.embedded.AIModel;
 import app.aiscalabilityreview.job.ReviewJobExecutor;
-import app.aiscalabilityreview.service.builder.ReviewJobBuilder;
+import app.aiscalabilityreview.domain.AppSettings;
+import app.aiscalabilityreview.service.builder.ReviewJobViewBuilder;
 import core.framework.async.Executor;
 import core.framework.inject.Inject;
 import core.framework.util.Strings;
@@ -29,6 +30,12 @@ public class ReviewJobService {
     ReviewJobExecutor reviewJobExecutor;
     @Inject
     Executor executor;
+    @Inject
+    ReviewJobQueryService reviewJobQueryService;
+    @Inject
+    ReviewJobViewBuilder reviewJobViewBuilder;
+    @Inject
+    AppSettingsService appSettingsService;
 
     public TriggerReviewResponse trigger(TriggerReviewRequest request) {
         serviceConfigService.getServiceConfig(request.serviceId);
@@ -47,16 +54,21 @@ public class ReviewJobService {
         ReviewJob job = reviewService.getReviewJob(jobId).orElseThrow(() -> new
             NotFoundException(Strings.format("Job not found, id = {} ", jobId)));
         var response = new GetReviewJobResponse();
-        response.view = ReviewJobBuilder.reviewJobView(job);
+        response.view = reviewJobViewBuilder.build(job);
         return response;
     }
 
+    /**
+     * One settings read serves the whole page: the budgets and the price-table version are the same
+     * for every row, and re-reading them per row turns a list into a burst of identical queries.
+     */
     public ListReviewJobResponse list(ListReviewJobRequest request) {
-        List<ReviewJob> jobs = reviewService.listReviewJobs(request.serviceId, request.limit, request.skip);
-        List<ReviewJobView> views = jobs.stream().map(ReviewJobBuilder::reviewJobView).toList();
+        AppSettings settings = appSettingsService.get();
+        List<ReviewJob> jobs = reviewJobQueryService.list(request);
+        List<ReviewJobView> views = jobs.stream().map(job -> reviewJobViewBuilder.build(job, settings)).toList();
         var response = new ListReviewJobResponse();
-        response.items = views;
-        response.total = views.size();  //todo
+        response.jobs = views;
+        response.total = reviewJobQueryService.count(request);
         return response;
     }
 }

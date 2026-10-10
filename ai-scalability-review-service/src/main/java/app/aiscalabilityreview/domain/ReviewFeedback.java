@@ -41,6 +41,25 @@ public class ReviewFeedback {
     @Field(name = "applied_in_job_id")
     public String appliedInJobId;
 
+    // ---- console-entered verdicts on a single finding (FR-6.10) ----
+
+    @Field(name = "job_id")
+    public String jobId;
+
+    /** Stable key of the finding this verdict is about, normally the report heading anchor. */
+    @Field(name = "finding_key")
+    public String findingKey;
+
+    @Field(name = "finding_title")
+    public String findingTitle;
+
+    /** CONFIRMED | FALSE_POSITIVE | WONT_FIX — the reader's judgement, not the model's. */
+    @Field(name = "verdict")
+    public String verdict;
+
+    @Field(name = "source")
+    public String source;  // CONSOLE | CONFLUENCE
+
     @Field(name = "created_at")
     public ZonedDateTime createdAt;
 

@@ -95,6 +95,16 @@ public class GenerateLocalReviewRequest {
     @Property(name = "output_base_dir")
     public String outputBaseDir;  // base directory for output files; defaults to ./reports relative to working dir
 
+    @Property(name = "labels")
+    public List<String> labels;  // free-text labels carried onto the run, searchable in the console
+
+    /**
+     * Codes of the validation warnings the operator explicitly accepted (FR-1.13). Stored with the
+     * run so a later reader knows it started with known gaps; errors can never be acknowledged away.
+     */
+    @Property(name = "acknowledged_warnings")
+    public List<String> acknowledgedWarnings;
+
     @NotNull
     @NotBlank
     @Property(name = "operator")

@@ -1,10 +1,13 @@
 package app.aiscalabilityreview;
 
+import app.aiscalabilityreview.domain.AppSettings;
 import app.aiscalabilityreview.domain.AuditLog;
 import app.aiscalabilityreview.domain.ModelConfig;
+import app.aiscalabilityreview.domain.Notification;
 import app.aiscalabilityreview.domain.ReportComparison;
 import app.aiscalabilityreview.domain.ReviewFeedback;
 import app.aiscalabilityreview.domain.ReviewJob;
+import app.aiscalabilityreview.domain.ReviewPreset;
 import app.aiscalabilityreview.domain.ReviewReport;
 import app.aiscalabilityreview.domain.ServiceConfig;
 import app.aiscalabilityreview.domain.ValidationResult;
@@ -28,11 +31,14 @@ public class AIScalabilityReviewApp extends App {
     private void bindCollections() {
         var mongo = config(MongoConfig.class);
         mongo.uri(requiredProperty("sys.mongo.uri"));
+        mongo.collection(AppSettings.class);
         mongo.collection(AuditLog.class);
         mongo.collection(ModelConfig.class);
+        mongo.collection(Notification.class);
         mongo.collection(ReportComparison.class);
         mongo.collection(ReviewFeedback.class);
         mongo.collection(ReviewJob.class);
+        mongo.collection(ReviewPreset.class);
         mongo.collection(ReviewReport.class);
         mongo.collection(ServiceConfig.class);
         mongo.collection(ValidationResult.class);

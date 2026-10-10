@@ -1,6 +1,8 @@
 package app.aiscalabilityreview.service;
 
-import core.framework.api.json.Property;
+import app.aiscalabilityreview.service.GeminiCliOutput.ModelStats;
+import app.aiscalabilityreview.service.GeminiCliOutput.TokenStats;
+import app.aiscalabilityreview.service.GeminiCliOutput.ToolCallStats;
 import core.framework.json.JSON;
 import core.framework.util.Strings;
 import org.slf4j.Logger;
@@ -15,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 /**
@@ -36,6 +39,9 @@ import java.util.stream.Stream;
  *
  * <p>The CLI is invoked with {@code --output-format json} so each run reports its own token usage
  * and tool-call counts; those are returned in {@link GeminiRunResult} for per-stage accounting.
+ * That same flag is why the console cannot show progress inside a stage: nothing reaches stdout
+ * until the stage ends, so the only live signal is the stderr stream, which
+ * {@link GeminiRunContext#logFile()} redirects to a file the console can tail.
  *
  * <p>Authentication is pinned to Vertex AI with Application Default Credentials rather than
  * inherited from the shell — see {@link #pinVertexAuth}.
@@ -49,6 +55,7 @@ public class GeminiCliService {
     public static final String MCP_DISABLED = "__disabled__";
     private static final String MCP_TOOL_NAME_PREFIX = "mcp_";
     private static final int ERROR_OUTPUT_LIMIT = 4000;
+    private static final int VERSION_TIMEOUT_SECONDS = 15;
 
     private static final String GOOGLE_API_KEY = "GOOGLE_API_KEY";
     private static final String GEMINI_API_KEY = "GEMINI_API_KEY";
@@ -76,22 +83,42 @@ public class GeminiCliService {
         this.cloudLocation = cloudLocation;
     }
 
+    public String cloudProject() {
+        return cloudProject;
+    }
+
+    public String cloudLocation() {
+        return cloudLocation;
+    }
+
+    /** @return the installed CLI version, or null when the CLI is not on PATH */
+    public String version() {
+        return ProcessRunner.run(List.of("gemini", "--version"), null, VERSION_TIMEOUT_SECONDS);
+    }
+
     public GeminiRunResult run(GeminiRunRequest request) throws IOException, InterruptedException {
+        return run(request, GeminiRunContext.none());
+    }
+
+    public GeminiRunResult run(GeminiRunRequest request, GeminiRunContext context) throws IOException, InterruptedException {
         Path workDir = Files.createTempDirectory("gemini-workdir-");
         Path promptFile = workDir.resolve("prompt.md");
-        Path stderrFile = workDir.resolve("stderr.log");
+        boolean keepLog = !Strings.isBlank(context.logFile());
+        Path stderrFile = keepLog ? Path.of(context.logFile()) : workDir.resolve("stderr.log");
+        String sessionId = UUID.randomUUID().toString();
         try {
             Files.writeString(promptFile, request.prompt());
             logger.info("Running Gemini CLI: model={}, promptChars={}, includeDirs={}, mcpServers={}, timeoutMinutes={}",
                 request.model(), request.prompt().length(), request.includeDirs(), request.allowedMcpServers(), request.timeoutMinutes());
 
-            ProcessBuilder pb = new ProcessBuilder(command(request, promptFile));
+            ProcessBuilder pb = new ProcessBuilder(command(request, promptFile, sessionId));
             pb.directory(workDir.toFile());
             pb.redirectError(stderrFile.toFile());
             pinVertexAuth(pb.environment());
 
             long startMs = System.currentTimeMillis();
             Process process = pb.start();
+            if (context.processListener() != null) context.processListener().accept(process);
             byte[] stdoutBytes = process.getInputStream().readAllBytes();
             boolean finished = process.waitFor(request.timeoutMinutes(), TimeUnit.MINUTES);
             if (!finished) {
@@ -107,14 +134,14 @@ public class GeminiCliService {
                     + errorMessage(stdout, Files.readString(stderrFile, StandardCharsets.UTF_8)));
             }
 
-            GeminiRunResult result = parseResult(request.model(), stdout, durationMs);
+            GeminiRunResult result = parseResult(request.model(), stdout, durationMs, sessionId);
             logger.info("Gemini CLI completed: model={}, durationMs={}, inputTokens={}, outputTokens={}, cachedTokens={}, apiRequests={}, toolCalls={}, mcpToolCalls={}, responseChars={}",
                 result.model(), result.durationMs(), result.inputTokens(), result.outputTokens(), result.cachedTokens(),
                 result.apiRequests(), result.toolCalls(), result.mcpToolCalls(), result.response().length());
             return result;
         } finally {
             deleteQuietly(promptFile);
-            deleteQuietly(stderrFile);
+            if (!keepLog) deleteQuietly(stderrFile);
             deleteQuietly(workDir);
         }
     }
@@ -155,11 +182,11 @@ public class GeminiCliService {
         logger.info("Gemini CLI auth: Vertex AI via Application Default Credentials, project={}, location={}", cloudProject, cloudLocation);
     }
 
-    private List<String> command(GeminiRunRequest request, Path promptFile) {
+    private List<String> command(GeminiRunRequest request, Path promptFile, String sessionId) {
         List<String> baseArgs = List.of(
             "gemini", "--model", request.model(), "--yolo", "--skip-trust",
             "--output-format", "json",
-            "--session-id", UUID.randomUUID().toString());
+            "--session-id", sessionId);
         List<String> dirArgs = request.includeDirs().stream()
             .flatMap(dir -> Stream.of("--include-directories", dir))
             .toList();
@@ -181,28 +208,42 @@ public class GeminiCliService {
      * so a CLI version that stops emitting the envelope degrades to the previous behaviour instead
      * of failing the stage.
      */
-    private GeminiRunResult parseResult(String model, String stdout, long durationMs) {
-        CliOutput output = parseOutput(stdout);
+    private GeminiRunResult parseResult(String model, String stdout, long durationMs, String sessionId) {
+        GeminiCliOutput output = parseOutput(stdout);
         if (output == null) {
             logger.warn("Gemini CLI did not return a JSON envelope; falling back to raw stdout and zero token stats");
-            return new GeminiRunResult(model, stdout, durationMs, 0, 0, 0, 0, 0, 0);
+            return new GeminiRunResult(model, stdout, durationMs, new TokenUsage(0, 0, 0), new CallCounts(0, 0, 0), sessionId, null);
         }
+        TokenUsage tokens = tokenUsage(output);
+        CallCounts calls = callCounts(output);
+        String response = output.response == null ? "" : output.response.trim();
+        String resolvedSessionId = output.sessionId == null ? sessionId : output.sessionId;
+        String rawStats = output.stats == null ? null : JSON.toJSON(output.stats);
+        return new GeminiRunResult(model, response, durationMs, tokens, calls, resolvedSessionId, rawStats);
+    }
+
+    private TokenUsage tokenUsage(GeminiCliOutput output) {
         long inputTokens = 0;
         long outputTokens = 0;
         long cachedTokens = 0;
+        if (output.stats != null && output.stats.models != null) {
+            for (Map.Entry<String, ModelStats> entry : output.stats.models.entrySet()) {
+                ModelStats stats = entry.getValue();
+                if (stats == null || stats.tokens == null) continue;
+                inputTokens += inputTokens(stats.tokens);
+                outputTokens += outputTokens(stats.tokens);
+                cachedTokens += value(stats.tokens.cached);
+            }
+        }
+        return new TokenUsage(inputTokens, outputTokens, cachedTokens);
+    }
+
+    private CallCounts callCounts(GeminiCliOutput output) {
         int apiRequests = 0;
         if (output.stats != null && output.stats.models != null) {
             for (Map.Entry<String, ModelStats> entry : output.stats.models.entrySet()) {
                 ModelStats stats = entry.getValue();
-                if (stats == null) continue;
-                if (stats.tokens != null) {
-                    inputTokens += inputTokens(stats.tokens);
-                    outputTokens += outputTokens(stats.tokens);
-                    cachedTokens += value(stats.tokens.cached);
-                }
-                if (stats.api != null) {
-                    apiRequests += (int) value(stats.api.totalRequests);
-                }
+                if (stats != null && stats.api != null) apiRequests += (int) value(stats.api.totalRequests);
             }
         }
         int toolCalls = 0;
@@ -211,9 +252,7 @@ public class GeminiCliService {
             toolCalls = (int) value(output.stats.tools.totalCalls);
             mcpToolCalls = mcpToolCalls(output.stats.tools.byName);
         }
-        String response = output.response == null ? "" : output.response.trim();
-        return new GeminiRunResult(model, response, durationMs, inputTokens, outputTokens, cachedTokens,
-            apiRequests, toolCalls, mcpToolCalls);
+        return new CallCounts(apiRequests, toolCalls, mcpToolCalls);
     }
 
     /** Prefers the explicit prompt count, and derives it from the total when the CLI omits it. */
@@ -240,12 +279,12 @@ public class GeminiCliService {
         return count;
     }
 
-    private CliOutput parseOutput(String stdout) {
+    private GeminiCliOutput parseOutput(String stdout) {
         int start = stdout.indexOf('{');
         int end = stdout.lastIndexOf('}');
         if (start < 0 || end <= start) return null;
         try {
-            return JSON.fromJSON(CliOutput.class, stdout.substring(start, end + 1));
+            return JSON.fromJSON(GeminiCliOutput.class, stdout.substring(start, end + 1));
         } catch (RuntimeException e) {
             logger.warn("Could not parse Gemini CLI JSON output: {}", e.getMessage());
             return null;
@@ -254,7 +293,7 @@ public class GeminiCliService {
 
     /** Prefers the structured error from the JSON envelope, falling back to the tail of stderr. */
     private String errorMessage(String stdout, String stderr) {
-        CliOutput output = parseOutput(stdout);
+        GeminiCliOutput output = parseOutput(stdout);
         if (output != null && output.error != null && output.error.message != null) {
             return truncate(output.error.message);
         }
@@ -293,126 +332,59 @@ public class GeminiCliService {
     }
 
     /**
-     * @param outputTokens candidate plus thinking tokens — both are billed as output
-     * @param cachedTokens part of inputTokens that was served from cache
+     * Side channels around one invocation.
+     *
+     * @param logFile         where to keep the CLI's stderr so the console can tail it; null sends it
+     *                        to a temporary file that is deleted when the stage ends
+     * @param processListener receives the subprocess as soon as it starts, so a cancel can destroy it
      */
-    public record GeminiRunResult(String model,
-                                  String response,
-                                  long durationMs,
-                                  long inputTokens,
-                                  long outputTokens,
-                                  long cachedTokens,
-                                  int apiRequests,
-                                  int toolCalls,
-                                  int mcpToolCalls) {
-        public long totalTokens() {
-            return inputTokens + outputTokens;
+    public record GeminiRunContext(String logFile, Consumer<Process> processListener) {
+        public static GeminiRunContext none() {
+            return new GeminiRunContext(null, null);
         }
     }
 
-    public static class CliOutput {
-        @Property(name = "session_id")
-        public String sessionId;
-
-        @Property(name = "response")
-        public String response;
-
-        @Property(name = "stats")
-        public CliStats stats;
-
-        @Property(name = "error")
-        public CliError error;
+    /** @param cachedTokens part of inputTokens that was served from cache, and priced differently */
+    public record TokenUsage(long inputTokens, long outputTokens, long cachedTokens) {
     }
 
-    public static class CliError {
-        @Property(name = "type")
-        public String type;
-
-        @Property(name = "message")
-        public String message;
-
-        @Property(name = "code")
-        public Integer code;
+    public record CallCounts(int apiRequests, int toolCalls, int mcpToolCalls) {
     }
 
-    public static class CliStats {
-        @Property(name = "models")
-        public Map<String, ModelStats> models;
+    /** @param rawStatsJson the CLI's own {@code stats} object, kept verbatim for provenance */
+    public record GeminiRunResult(String model,
+                                  String response,
+                                  long durationMs,
+                                  TokenUsage tokens,
+                                  CallCounts calls,
+                                  String sessionId,
+                                  String rawStatsJson) {
+        public long inputTokens() {
+            return tokens.inputTokens();
+        }
 
-        @Property(name = "tools")
-        public ToolStats tools;
-    }
+        public long outputTokens() {
+            return tokens.outputTokens();
+        }
 
-    public static class ModelStats {
-        @Property(name = "api")
-        public ApiStats api;
+        public long cachedTokens() {
+            return tokens.cachedTokens();
+        }
 
-        @Property(name = "tokens")
-        public TokenStats tokens;
-    }
+        public int apiRequests() {
+            return calls.apiRequests();
+        }
 
-    public static class ApiStats {
-        @Property(name = "totalRequests")
-        public Long totalRequests;
+        public int toolCalls() {
+            return calls.toolCalls();
+        }
 
-        @Property(name = "totalErrors")
-        public Long totalErrors;
+        public int mcpToolCalls() {
+            return calls.mcpToolCalls();
+        }
 
-        @Property(name = "totalLatencyMs")
-        public Long totalLatencyMs;
-    }
-
-    public static class TokenStats {
-        @Property(name = "input")
-        public Long input;
-
-        @Property(name = "prompt")
-        public Long prompt;
-
-        @Property(name = "candidates")
-        public Long candidates;
-
-        @Property(name = "total")
-        public Long total;
-
-        @Property(name = "cached")
-        public Long cached;
-
-        @Property(name = "thoughts")
-        public Long thoughts;
-
-        @Property(name = "tool")
-        public Long tool;
-    }
-
-    public static class ToolStats {
-        @Property(name = "totalCalls")
-        public Long totalCalls;
-
-        @Property(name = "totalSuccess")
-        public Long totalSuccess;
-
-        @Property(name = "totalFail")
-        public Long totalFail;
-
-        @Property(name = "totalDurationMs")
-        public Long totalDurationMs;
-
-        @Property(name = "byName")
-        public Map<String, ToolCallStats> byName;
-    }
-
-    public static class ToolCallStats {
-        @Property(name = "count")
-        public Long count;
-
-        @Property(name = "success")
-        public Long success;
-
-        @Property(name = "fail")
-        public Long fail;
-
-        @Property(name = "durationMs")
-        public Long durationMs;
+        public long totalTokens() {
+            return tokens.inputTokens() + tokens.outputTokens();
+        }
     }
 }

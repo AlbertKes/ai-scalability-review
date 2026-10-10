@@ -2,6 +2,23 @@
 
 A project integrated with Datadog MCP, MySQL MCP, Azure MCP, etc. and use AI model to generate scalability review report.
 
+## Console
+
+`scalability-review-site-frontend/` is a local web console over this pipeline: start a review from a
+form that validates every parameter before anything is created, watch it stage by stage, read the
+report as HTML, compare runs of the same service, and see what each run cost in tokens and time.
+See [its README](scalability-review-site-frontend/README.md) for how to run it.
+
+Two changes the console required are worth knowing about even if you only use the API:
+
+- **Every run writes into its own directory**, `<base>/<service>/<yyyyMMdd-HHmmss>-<jobId>`, with a
+  `latest` symlink at `<base>/<service>/latest`. Runs of one service used to share a directory and
+  overwrite each other's `code-context.md`, `metrics.md` and `report-snapshot.json`.
+- **The trigger request is stored on the job**, so a run can be described, repeated and recovered
+  after a restart. `POST /local-review/validate` returns every problem with a request at once
+  without creating anything, and `POST /local-review/generate` rejects a bad request with the same
+  complete list rather than the first problem it finds.
+
 ## Local one-click review
 
 `POST /local-review/generate` runs a full review on the developer's machine through the local Gemini
@@ -35,7 +52,7 @@ Optional fields:
 | `app_code_paths` | whole repository | repo-relative modules to analyze; the single biggest lever on stage 1 cost |
 | `azure_resource_group` | read from the infra repository | Azure resource group holding this environment's resources |
 | `azure_subscription_id` | Azure CLI profile default | subscription the Azure MCP calls run against |
-| `skip_code_analysis` | `false` | reuse the existing `code-context.md` |
+| `skip_code_analysis` | `false` | reuse the `code-context.md` of the newest previous run of this service |
 | `skip_validation` | `false` | skip stage 5; roughly halves the MCP round-trips of a run |
 | `output_base_dir` | `reports` | where the run writes its files |
 | `code_analysis_model`, `metric_collection_model`, `synthesis_model`, `validation_model` | see below | pin one stage to a different Gemini model |
