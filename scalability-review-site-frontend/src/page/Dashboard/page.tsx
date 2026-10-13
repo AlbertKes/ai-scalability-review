@@ -3,7 +3,7 @@ import {Card, Col, Empty, List, Progress, Row, Space, Statistic, Tag, Typography
 import {useNavigate} from "@wonder/core-fe";
 import {ScoreBadge} from "@/components/ScoreBadge";
 import {RunStatusTag} from "@/components/StatusTag";
-import {STAGE_LABELS} from "@/constants/review";
+import {runningStageLabel} from "@/constants/review";
 import {RUN_DETAIL_PATH} from "@/route";
 import {formatCost, formatDuration, formatShortDateTime, formatTokens} from "@/utils/format";
 import {useRuntimeState} from "@/utils/useRuntimeState";
@@ -77,7 +77,7 @@ export default function Dashboard() {
                       <strong>{job.service_id}</strong>
                       {job.env ? <Tag>{job.env}</Tag> : null}
                       <Typography.Text type="secondary">
-                        {STAGE_LABELS[job.current_stage ?? ""] ?? job.current_stage ?? "starting"}
+                        {runningStageLabel(job.stages, job.current_stage)}
                       </Typography.Text>
                     </Space>
                   </List.Item>

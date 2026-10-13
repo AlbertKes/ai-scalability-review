@@ -1,13 +1,16 @@
 package app.aiscalabilityreview.job;
 
+import app.aiscalabilityreview.service.ProcessRunner;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -61,10 +64,11 @@ public class LocalReviewRunRegistry {
         if (handle == null) return false;
         handle.cancelled = true;
         removeFromQueue(jobId);
-        Process process = handle.process;
-        if (process != null && process.isAlive()) {
-            process.destroyForcibly();
-            logger.info("Destroyed the Gemini CLI subprocess of cancelled run {}", jobId);
+        for (Process process : handle.processes) {
+            if (process.isAlive()) {
+                ProcessRunner.destroyTree(process);
+                logger.info("Destroyed a Gemini CLI subprocess tree of cancelled run {}", jobId);
+            }
         }
         return true;
     }
@@ -121,7 +125,12 @@ public class LocalReviewRunRegistry {
 
     public static final class RunHandle {
         final String serviceId;
-        private volatile Process process;
+        /**
+         * More than one at a time: code analysis runs beside the metric stage, so a cancel has to
+         * reach both. Finished processes stay in the list — destroying a dead one is a no-op, and a
+         * run holds at most five.
+         */
+        final List<Process> processes = new CopyOnWriteArrayList<>();
         private volatile boolean cancelled;
 
         RunHandle(String serviceId) {
@@ -130,7 +139,7 @@ public class LocalReviewRunRegistry {
 
         /** Called as soon as a stage's subprocess starts, so a cancel arriving later can reach it. */
         public void attach(Process process) {
-            this.process = process;
+            processes.add(process);
         }
 
         public boolean isCancelled() {

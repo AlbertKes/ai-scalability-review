@@ -17,6 +17,8 @@ import java.nio.file.Path;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 
 /**
  * Bookkeeping around one stage: status transitions, timing, token and cost accounting, the artifacts
@@ -65,6 +67,46 @@ public class LocalReviewStageRunner {
             complete(input.jobId(), input.stageName(), stageStatus, startMs);
         } catch (Exception e) {
             fail(input, stageStatus, startMs, e);
+        }
+    }
+
+    /**
+     * Waits for a stage handed to another thread and makes its failure this thread's failure, so a
+     * parallel arm reports exactly as a sequential one would.
+     */
+    public void awaitStage(String stageName, Future<Void> future) {
+        Throwable failure = failureOf(future);
+        if (failure == null) return;
+        if (failure instanceof FatalStageException fatal) throw fatal;
+        throw new FatalStageException(stageName, failure);
+    }
+
+    /** @return what the stage failed with, unwrapped from its {@link Future}, or null if it passed */
+    private Throwable failureOf(Future<Void> future) {
+        try {
+            future.get();
+            return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return e;
+        } catch (ExecutionException e) {
+            return e.getCause() == null ? e : e.getCause();
+        }
+    }
+
+    /**
+     * Waits for a stage whose outcome no longer matters because another arm has already failed.
+     * The point is not to report it but to let its subprocess finish before the run is wound up —
+     * a run that reports failure while a CLI is still writing into its directory is worse than a
+     * few seconds of waiting.
+     */
+    public void awaitQuietly(Future<Void> future) {
+        try {
+            future.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException e) {
+            logger.info("A parallel stage also failed while the run was already failing: {}", e.getMessage());
         }
     }
 

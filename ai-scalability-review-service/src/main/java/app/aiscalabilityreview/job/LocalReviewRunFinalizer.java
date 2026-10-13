@@ -23,6 +23,8 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -58,16 +60,24 @@ public class LocalReviewRunFinalizer {
      * Runs in a finally block, so it must tolerate a run that failed at any stage.
      */
     public void summarise(String jobId, LocalReviewArtifactPaths paths, LocalReviewRunStats stats) {
-        ReviewJob job = reviewService.getReviewJob(jobId).orElse(null);
-        if (job == null) return;
+        ReviewJob loaded = reviewService.getReviewJob(jobId).orElse(null);
+        if (loaded == null) return;
         AppSettings settings = appSettingsService.get();
 
-        applyTotals(job, settings);
-        applyScore(job);
-        applyValidation(job, paths);
-        reviewService.updateJob(job);
+        // Everything that reads a file or writes another collection happens before the lock, so the
+        // job stays locked only for the field assignments.
+        String overallScore = resolveScore(loaded);
+        Validation validation = resolveValidation(loaded, paths);
+        long wallClockMs = wallClockMs(loaded);
+        reviewService.mutateJob(jobId, job -> {
+            applyTotals(job, settings, wallClockMs);
+            job.overallScore = overallScore;
+            job.validationVerdict = validation.verdict();
+            job.validationResultId = validation.resultId();
+        });
 
-        writeRunStats(job, paths, stats);
+        ReviewJob job = reviewService.getReviewJob(jobId).orElse(loaded);
+        writeRunStats(job, paths, stats, settings, wallClockMs);
         if (job.request != null && !Strings.isBlank(job.request.outputBaseDir)) {
             LocalReviewOutputPaths.updateLatestLink(job.request.outputBaseDir, job.serviceId, paths.runDir());
         }
@@ -127,11 +137,29 @@ public class LocalReviewRunFinalizer {
         return failed;
     }
 
-    private void applyTotals(ReviewJob job, AppSettings settings) {
+    /**
+     * How long the run actually took: the first stage to start until the last to finish. Not the sum
+     * of the stage durations, which double-counts the overlap now that code analysis runs beside the
+     * infra and metric stages, and not {@code startedAt} to {@code completedAt}, which would fold in
+     * any time the run spent queued behind another.
+     */
+    private long wallClockMs(ReviewJob job) {
+        if (job.stageStatuses == null || job.stageStatuses.isEmpty()) return 0;
+        ZonedDateTime first = null;
+        ZonedDateTime last = null;
+        for (StageStatus stage : job.stageStatuses.values()) {
+            if (stage == null) continue;
+            if (stage.startedAt != null && (first == null || stage.startedAt.isBefore(first))) first = stage.startedAt;
+            if (stage.completedAt != null && (last == null || stage.completedAt.isAfter(last))) last = stage.completedAt;
+        }
+        if (first == null || last == null) return 0;
+        return Math.max(0, Duration.between(first, last).toMillis());
+    }
+
+    private void applyTotals(ReviewJob job, AppSettings settings, long wallClockMs) {
         long input = 0;
         long output = 0;
         long cached = 0;
-        long duration = 0;
         int mcpCalls = 0;
         List<Double> costs = new ArrayList<>();
         if (job.stageStatuses != null) {
@@ -140,7 +168,6 @@ public class LocalReviewRunFinalizer {
                 input += orZero(stage.inputTokens);
                 output += orZero(stage.outputTokens);
                 cached += orZero(stage.cachedTokens);
-                duration += orZero(stage.durationMs);
                 mcpCalls += orZero(stage.mcpToolCalls);
                 costs.add(stage.estimatedCostUsd);
             }
@@ -149,48 +176,50 @@ public class LocalReviewRunFinalizer {
         job.totalOutputTokens = output;
         job.totalCachedTokens = cached;
         job.totalTokens = input + output;
-        job.totalDurationMs = duration;
+        job.totalDurationMs = wallClockMs;
         job.totalMcpToolCalls = mcpCalls;
         job.estimatedCostUsd = costService.sum(costs);
         long tokenBudget = settings.tokenBudget == null ? LocalReviewRunStats.TOKEN_BUDGET : settings.tokenBudget;
         long durationBudget = settings.durationBudgetMs == null
             ? LocalReviewRunStats.DURATION_BUDGET_MS : settings.durationBudgetMs;
-        boolean within = input + output <= tokenBudget && duration <= durationBudget;
+        boolean within = input + output <= tokenBudget && wallClockMs <= durationBudget;
         job.withinBudget = within;
     }
 
     /**
-     * Copies the report's overall score onto the run so the list can filter on it. An absent report
-     * leaves it null — UNKNOWN is a score the report itself states, not one invented here.
+     * The report's overall score, for the run list to filter on. An absent report leaves it null —
+     * UNKNOWN is a score the report itself states, not one invented here.
      */
-    private void applyScore(ReviewJob job) {
-        if (job.reportId == null) return;
-        reviewService.getReviewReport(job.reportId).ifPresent(report -> job.overallScore = report.overallScore);
+    private String resolveScore(ReviewJob job) {
+        if (job.reportId == null) return job.overallScore;
+        return reviewService.getReviewReport(job.reportId).map(report -> report.overallScore).orElse(job.overallScore);
     }
 
     /**
-     * Stores the validation verdict and its per-check table. A run that skipped stage 5 keeps a null
-     * verdict rather than an implied pass.
+     * Stores the validation result and returns what belongs on the job. A run that skipped stage 5
+     * keeps a null verdict rather than an implied pass.
      */
-    private void applyValidation(ReviewJob job, LocalReviewArtifactPaths paths) {
-        if (!Files.isRegularFile(Path.of(paths.validationReport()))) return;
+    private Validation resolveValidation(ReviewJob job, LocalReviewArtifactPaths paths) {
+        if (!Files.isRegularFile(Path.of(paths.validationReport()))) {
+            return new Validation(job.validationVerdict, job.validationResultId);
+        }
         String markdown = read(paths.validationReport());
         String verdict = ValidationReportParser.verdict(markdown);
-        job.validationVerdict = verdict;
-        if (job.reportId == null) return;
+        if (job.reportId == null) return new Validation(verdict, null);
         try {
             String validationId = reviewService.createValidationResult(job.reportId,
                 GeminiModels.toAIModel(validationModel(job)), job.triggeredBy);
             ValidationResult result = reviewService.getValidationResult(validationId).orElse(null);
-            if (result == null) return;
+            if (result == null) return new Validation(verdict, null);
             result.status = ReviewJob.STATUS_COMPLETED;
             result.verdict = verdict;
             result.checkResults = ValidationReportParser.checks(markdown);
             result.validationReportMarkdown = markdown;
             reviewService.updateValidationResult(result);
-            job.validationResultId = validationId;
+            return new Validation(verdict, validationId);
         } catch (IllegalArgumentException e) {
             logger.warn("Could not store the validation result for job {}: {}", job.jobId, e.getMessage());
+            return new Validation(verdict, null);
         }
     }
 
@@ -199,10 +228,18 @@ public class LocalReviewRunFinalizer {
         return GeminiModels.orDefault(job.request.validationModel, GeminiModels.VALIDATION_DEFAULT);
     }
 
-    private void writeRunStats(ReviewJob job, LocalReviewArtifactPaths paths, LocalReviewRunStats stats) {
+    private void writeRunStats(ReviewJob job, LocalReviewArtifactPaths paths, LocalReviewRunStats stats,
+                               AppSettings settings, long wallClockMs) {
+        long tokenBudget = settings.tokenBudget == null ? LocalReviewRunStats.TOKEN_BUDGET : settings.tokenBudget;
+        long durationBudget = settings.durationBudgetMs == null
+            ? LocalReviewRunStats.DURATION_BUDGET_MS : settings.durationBudgetMs;
+        if (!stats.withinBudget(wallClockMs, tokenBudget, durationBudget)) {
+            logger.warn("Local review job {} exceeded the cost/latency budget: {}", job.jobId,
+                stats.summaryLine(wallClockMs, tokenBudget, durationBudget));
+        }
         Path statsPath = Path.of(LocalReviewPromptBuilder.runStatsPath(paths.runDir()));
         try {
-            Files.writeString(statsPath, stats.render(job.serviceId, job.jobId));
+            Files.writeString(statsPath, stats.render(job.serviceId, job.jobId, wallClockMs, tokenBudget, durationBudget));
         } catch (IOException e) {
             logger.warn("Could not write run stats to {}: {}", statsPath, e.getMessage());
         }
@@ -236,5 +273,9 @@ public class LocalReviewRunFinalizer {
             logger.warn("Could not read file {}: {}", path, e.getMessage());
             return "";
         }
+    }
+
+    /** What {@link #resolveValidation} found, to be assigned once the job is locked. */
+    private record Validation(String verdict, String resultId) {
     }
 }

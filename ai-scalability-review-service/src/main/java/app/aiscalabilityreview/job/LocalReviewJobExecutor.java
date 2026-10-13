@@ -2,7 +2,6 @@ package app.aiscalabilityreview.job;
 
 import app.aiscalabilityreview.api.localreview.GenerateLocalReviewRequest;
 import app.aiscalabilityreview.domain.ReviewJob;
-import app.aiscalabilityreview.domain.ReviewJob.StageStatus;
 import app.aiscalabilityreview.domain.ReviewReport;
 import app.aiscalabilityreview.exception.FatalStageException;
 import app.aiscalabilityreview.job.LocalReviewRunRegistry.RunHandle;
@@ -15,24 +14,22 @@ import app.aiscalabilityreview.service.AppSettingsService;
 import app.aiscalabilityreview.service.GeminiCliService;
 import app.aiscalabilityreview.service.GeminiCliService.GeminiRunRequest;
 import app.aiscalabilityreview.service.GeminiModels;
-import app.aiscalabilityreview.service.GitRepoInspector;
 import app.aiscalabilityreview.service.InfraContextService;
 import app.aiscalabilityreview.service.InfraContextService.InfraContextParams;
 import app.aiscalabilityreview.service.MySQLTableStorageService;
 import app.aiscalabilityreview.service.MySQLTableStorageService.MySQLTableParams;
 import app.aiscalabilityreview.service.ReviewService;
 import app.aiscalabilityreview.service.builder.LocalReviewRequestMapper;
+import core.framework.async.Executor;
 import core.framework.inject.Inject;
 import core.framework.util.Strings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.concurrent.Future;
 
 /**
  * Orchestrates the local review stages using the local Gemini CLI. Outputs are written to disk in a
@@ -75,10 +72,6 @@ public class LocalReviewJobExecutor {
     private static final int METRIC_COLLECTION_TIMEOUT_MINUTES = 20;
     private static final int SYNTHESIS_TIMEOUT_MINUTES = 15;
     private static final int VALIDATION_TIMEOUT_MINUTES = 20;
-    private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-
-    private static final String CODE_CONTEXT_PLACEHOLDER =
-        "Code context: not available — the code analysis stage was skipped for this run.\n";
 
     private final Logger logger = LoggerFactory.getLogger(LocalReviewJobExecutor.class);
 
@@ -99,7 +92,9 @@ public class LocalReviewJobExecutor {
     @Inject
     AppSettingsService appSettingsService;
     @Inject
-    GitRepoInspector gitRepoInspector;
+    LocalReviewRunPreparer preparer;
+    @Inject
+    Executor executor;
 
     public void executeLocalReview(String jobId) {
         ReviewJob job = reviewService.getReviewJob(jobId).orElse(null);
@@ -117,7 +112,7 @@ public class LocalReviewJobExecutor {
 
         LocalReviewArtifactPaths paths;
         try {
-            paths = prepare(job, request);
+            paths = preparer.prepare(job, request);
         } catch (IOException e) {
             reviewService.failJob(jobId, "Failed to create the run directory: " + e.getMessage());
             releaseRun(jobId);
@@ -176,98 +171,38 @@ public class LocalReviewJobExecutor {
         return e.getCause() == null ? e.getMessage() : e.getCause().getMessage();
     }
 
-    /**
-     * Creates this run's own directory, records the reproducibility fingerprint and carries over the
-     * artifacts of any stages a retry is reusing.
-     */
-    private LocalReviewArtifactPaths prepare(ReviewJob job, GenerateLocalReviewRequest request) throws IOException {
-        String base = baseDir(request);
-        request.outputBaseDir = base;
-        String runDir = Path.of(LocalReviewOutputPaths.runDir(base, job.serviceId, job.startedAt, job.jobId))
-            .toAbsolutePath().toString();
-        Files.createDirectories(Path.of(runDir));
-        String today = DATE_FORMAT.format(job.startedAt);
-        LocalReviewArtifactPaths paths = new LocalReviewArtifactPaths(runDir,
-            LocalReviewPromptBuilder.codeContextPath(runDir),
-            LocalReviewPromptBuilder.infraContextPath(runDir),
-            LocalReviewPromptBuilder.metricsPath(runDir),
-            LocalReviewPromptBuilder.mysqlTablesPath(runDir),
-            LocalReviewPromptBuilder.reviewReportPath(runDir, today),
-            LocalReviewPromptBuilder.validationReportPath(runDir, today),
-            LocalReviewPromptBuilder.reportSnapshotPath(runDir));
-
-        job.outputDir = runDir;
-        job.request.outputBaseDir = base;
-        job.cliVersion = geminiCliService.version();
-        job.promptVersion = PROMPT_VERSION;
-        job.repoShaApp = gitRepoInspector.sha(request.localAppRepoPath);
-        job.repoShaInfra = gitRepoInspector.sha(request.localInfraRepoPath);
-        job.repoDirtyApp = gitRepoInspector.isDirty(request.localAppRepoPath);
-        job.repoDirtyInfra = gitRepoInspector.isDirty(request.localInfraRepoPath);
-        job.azureResourceGroup = azureResourceGroup(request);
-        reviewService.updateJob(job);
-
-        copyReusedArtifacts(job, runDir);
-        logger.info("Local review job {} writing to {}", job.jobId, runDir);
-        return paths;
-    }
-
-    private String baseDir(GenerateLocalReviewRequest request) {
-        if (!Strings.isBlank(request.outputBaseDir)) return request.outputBaseDir;
-        String configured = appSettingsService.get().outputBaseDir;
-        return Strings.isBlank(configured) ? "reports" : configured;
-    }
-
-    /**
-     * A retry runs in its own directory, so the stages it is not re-running must have their files
-     * brought across — otherwise the run would be missing the context those stages produced.
-     */
-    private void copyReusedArtifacts(ReviewJob job, String runDir) {
-        if (Strings.isBlank(job.retryOfJobId)) return;
-        ReviewJob source = reviewService.getReviewJob(job.retryOfJobId).orElse(null);
-        if (source == null || Strings.isBlank(source.outputDir) || source.stageStatuses == null) return;
-        int from = LocalReviewStages.indexOf(job.retryFromStage);
-        if (from < 0) return;
-        for (String stage : LocalReviewStages.ORDER.subList(0, from)) {
-            StageStatus status = source.stageStatuses.get(stage);
-            if (status == null || status.artifacts == null) continue;
-            status.artifacts.forEach(artifact -> copyQuietly(
-                Path.of(source.outputDir, artifact), Path.of(runDir, artifact)));
-        }
-    }
-
-    private void copyQuietly(Path from, Path to) {
-        try {
-            if (Files.isRegularFile(from)) Files.copy(from, to, StandardCopyOption.REPLACE_EXISTING);
-        } catch (IOException e) {
-            logger.warn("Could not carry {} over to the retry run: {}", from, e.getMessage());
-        }
-    }
-
     private void runStages(ReviewJob job, GenerateLocalReviewRequest request,
                            LocalReviewArtifactPaths paths, LocalReviewRunStats stats, RunHandle handle) {
-        runCodeAnalysisStage(job, request, paths, stats, handle);
-        runInfraContextStage(job, request, paths, stats, handle);
-        runMetricCollectionStage(job, request, paths, stats, handle);
+        Future<Void> codeAnalysis = executor.submit("code-analysis-" + job.jobId,
+            () -> runCodeAnalysisStage(job, request, paths, stats, handle));
+        try {
+            runInfraContextStage(job, request, paths, stats, handle);
+            runMetricCollectionStage(job, request, paths, stats, handle);
+        } catch (RuntimeException e) {
+            // this arm failed and owns the outcome; still let the other one stop before we wind up
+            stageRunner.awaitQuietly(codeAnalysis);
+            throw e;
+        }
+        stageRunner.awaitStage(LocalReviewStages.CODE_ANALYSIS, codeAnalysis);
+
         runSynthesisStage(job, request, paths, stats, handle);
         runValidationStage(job, request, paths, stats, handle);
     }
 
-    /** True when a retry starts later than this stage, so its output is reused rather than rebuilt. */
-    private boolean isReused(ReviewJob job, String stage) {
+    /** A retry starting later than this stage reuses its output instead of rebuilding it. */
+    private boolean skipIfReused(ReviewJob job, String stage) {
         if (Strings.isBlank(job.retryFromStage)) return false;
-        return LocalReviewStages.indexOf(stage) < LocalReviewStages.indexOf(job.retryFromStage);
+        if (LocalReviewStages.indexOf(stage) >= LocalReviewStages.indexOf(job.retryFromStage)) return false;
+        stageRunner.skip(job.jobId, stage, "reused from run " + job.retryOfJobId);
+        return true;
     }
 
     private void runCodeAnalysisStage(ReviewJob job, GenerateLocalReviewRequest request,
                                       LocalReviewArtifactPaths paths, LocalReviewRunStats stats, RunHandle handle) {
         String stage = LocalReviewStages.CODE_ANALYSIS;
-        if (isReused(job, stage)) {
-            stageRunner.skip(job.jobId, stage, "reused from run " + job.retryOfJobId);
-            return;
-        }
+        if (skipIfReused(job, stage)) return;
         if (Boolean.TRUE.equals(request.skipCodeAnalysis)) {
-            ensureCodeContextExists(request, job.serviceId, paths);
+            preparer.ensureCodeContextExists(request, job.serviceId, paths);
             stageRunner.skip(job.jobId, stage, "skipped by request");
             return;
         }
@@ -285,10 +220,7 @@ public class LocalReviewJobExecutor {
     private void runInfraContextStage(ReviewJob job, GenerateLocalReviewRequest request,
                                       LocalReviewArtifactPaths paths, LocalReviewRunStats stats, RunHandle handle) {
         String stage = LocalReviewStages.INFRA_CONTEXT;
-        if (isReused(job, stage)) {
-            stageRunner.skip(job.jobId, stage, "reused from run " + job.retryOfJobId);
-            return;
-        }
+        if (skipIfReused(job, stage)) return;
         StageInput input = new StageInput(job.jobId, stage, true, stats, paths.runDir(), handle,
             List.of(LocalReviewOutputPaths.INFRA_CONTEXT, LocalReviewOutputPaths.MYSQL_TABLES));
         stageRunner.runLocal(input, () -> {
@@ -303,10 +235,7 @@ public class LocalReviewJobExecutor {
     private void runMetricCollectionStage(ReviewJob job, GenerateLocalReviewRequest request,
                                           LocalReviewArtifactPaths paths, LocalReviewRunStats stats, RunHandle handle) {
         String stage = LocalReviewStages.METRIC_COLLECTION;
-        if (isReused(job, stage)) {
-            stageRunner.skip(job.jobId, stage, "reused from run " + job.retryOfJobId);
-            return;
-        }
+        if (skipIfReused(job, stage)) return;
         String model = GeminiModels.orDefault(request.metricCollectionModel, GeminiModels.METRIC_COLLECTION_DEFAULT);
         StageInput input = new StageInput(job.jobId, stage, true, stats, paths.runDir(), handle,
             List.of(LocalReviewOutputPaths.METRICS));
@@ -332,10 +261,7 @@ public class LocalReviewJobExecutor {
     private void runSynthesisStage(ReviewJob job, GenerateLocalReviewRequest request,
                                    LocalReviewArtifactPaths paths, LocalReviewRunStats stats, RunHandle handle) {
         String stage = LocalReviewStages.SYNTHESIS;
-        if (isReused(job, stage)) {
-            stageRunner.skip(job.jobId, stage, "reused from run " + job.retryOfJobId);
-            return;
-        }
+        if (skipIfReused(job, stage)) return;
         String model = GeminiModels.orDefault(request.synthesisModel, GeminiModels.SYNTHESIS_DEFAULT);
         StageInput input = new StageInput(job.jobId, stage, true, stats, paths.runDir(), handle,
             List.of(fileName(paths.reviewReport()), LocalReviewOutputPaths.REPORT_SNAPSHOT));
@@ -384,55 +310,13 @@ public class LocalReviewJobExecutor {
             params.atlasCluster = request.atlasCluster;
             params.kafkaConsumerGroups = request.kafkaConsumerGroups;
             params.mysqlTablesPath = paths.mysqlTables();
+            params.appCodePaths = request.appCodePaths;
             params.outputPath = paths.validationReport();
             return geminiCliService.run(new GeminiRunRequest(
                 LocalReviewPromptBuilder.buildValidationPrompt(params), model,
                 List.of(paths.runDir(), request.localInfraRepoPath, request.localAppRepoPath),
                 DATA_MCP, VALIDATION_TIMEOUT_MINUTES), context);
         });
-    }
-
-    /**
-     * The synthesis prompt attaches the code context with an @file reference, so a skipped stage must
-     * still leave a readable file behind. With one directory per run there is no fixed path to reuse,
-     * so the newest previous run of this service supplies it; failing that, a placeholder says the
-     * context is genuinely unavailable rather than silently empty.
-     */
-    private void ensureCodeContextExists(GenerateLocalReviewRequest request, String serviceId,
-                                         LocalReviewArtifactPaths paths) {
-        Path target = Path.of(paths.codeContext());
-        if (Files.exists(target)) return;
-        String previous = LocalReviewOutputPaths.latestCodeContext(baseDir(request), serviceId, paths.runDir());
-        try {
-            if (previous != null) {
-                Files.copy(Path.of(previous), target, StandardCopyOption.REPLACE_EXISTING);
-                logger.info("Reusing the code context from {}", previous);
-            } else {
-                Files.writeString(target, CODE_CONTEXT_PLACEHOLDER);
-                logger.warn("No previous code context for {}; wrote a placeholder because code analysis was skipped", serviceId);
-            }
-        } catch (IOException e) {
-            logger.warn("Could not prepare the code context at {}: {}", target, e.getMessage());
-        }
-    }
-
-    /**
-     * The request wins, so a service whose resources sit outside the environment's own group can say
-     * so; otherwise the group is read from the infra repository. Null is passed through to the prompt
-     * as "unknown", which asks the model to discover the group — guessing it from {@code env} is what
-     * produced a report full of `Resource group 'uat' could not be found`.
-     */
-    private String azureResourceGroup(GenerateLocalReviewRequest request) {
-        String configured = firstSet(request.azureResourceGroup, System.getenv("AZURE_RESOURCE_GROUP"));
-        if (configured != null) return configured;
-        String derived = infraContextService.azureResourceGroup(request.localInfraRepoPath, request.env);
-        if (derived == null) {
-            logger.warn("Could not resolve the Azure resource group for env {}; the metric stage will discover it",
-                request.env);
-        } else {
-            logger.info("Resolved the Azure resource group for env {} to {}", request.env, derived);
-        }
-        return derived;
     }
 
     private String fileName(String path) {

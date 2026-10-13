@@ -179,10 +179,16 @@ public class MetricCollectionTaskPrompt {
         Skip the MySQL expressions if {{MYSQL_HOST}} is N/A, and the MongoDB ones if
         {{ATLAS_CLUSTER}} is N/A. Otherwise one `query_metrics` call with the applicable expressions:
 
+        A datastore the service does not use is **absent, not missing**. Say nothing about it at
+        all: no row, no `NOT_COLLECTED` line, no "N/A". `NOT_COLLECTED` means data this review
+        should have and could not get, and diluting it with things that were never applicable is
+        what makes a reader stop reading it.
+
         - `avg:azure.dbformysql_flexibleservers.active_connections{name:{{MYSQL_HOST}}}.rollup(avg, 86400)`
         - `max:azure.dbformysql_flexibleservers.active_connections{name:{{MYSQL_HOST}}}.rollup(max, 86400)`
         - `sum:azure.dbformysql_flexibleservers.slow_queries{name:{{MYSQL_HOST}}}.as_count().rollup(sum, 86400)`
         - `max:azure.dbformysql_flexibleservers.replication_lag{name:{{MYSQL_HOST}}-*}.rollup(max, 86400)`
+        - `max:azure.dbformysql_flexibleservers.storage_used{name:{{MYSQL_HOST}}}.rollup(max, 86400)`
         - `avg:mongodb.atlas.oplatencies.reads.avg{clustername:{{ATLAS_CLUSTER}}}.rollup(avg, 86400)`
         - `avg:mongodb.atlas.oplatencies.writes.avg{clustername:{{ATLAS_CLUSTER}}}.rollup(avg, 86400)`
         - `max:mongodb.atlas.oplatencies.reads.avg{clustername:{{ATLAS_CLUSTER}}}.rollup(max, 86400)`
@@ -193,6 +199,15 @@ public class MetricCollectionTaskPrompt {
         - Active connections: 28-day average and peak.
         - Slow queries: daily average = (sum of all buckets) / 28, and the worst single day.
         - Replication lag: 28-day average and peak, in seconds.
+        - Storage used, in GB: the **last** bucket is the current figure, and last minus first is the
+          28-day growth. Report those two, not an average — storage only ever grows, so its mean over
+          the window describes no moment that existed.
+          The raw points are **bytes**: divide by 1024³ once, and only once. Sanity-check the result
+          against the provisioned `StorageSizeGB` from Group 7 — used storage cannot exceed it by
+          much, and cannot plausibly be a millionth of it. If your converted figure fails that check
+          the raw unit is not what was assumed: write
+          `NOT_COLLECTED: storage_used unit unexpected — raw value <value>` and move on rather than
+          publishing a number that cannot be true.
         - MongoDB read/write latencies, connections and scanned-per-returned, where applicable.
 
         ## Group 6 — Datadog: monitors
@@ -201,8 +216,12 @@ public class MetricCollectionTaskPrompt {
         `tags = ["service:{{SERVICE}}"]`. Record every monitor returned with its name and state; if
         the list is empty, write `None in ALERT or WARN`.
 
-        This Datadog MCP server exposes **no SLO tool**, so do not go looking for one: write
-        `NOT_COLLECTED: Datadog MCP exposes no SLO tool` for SLO compliance and move on.
+        SLOs: the tool list you were given for this server is the authority on whether SLO data is
+        reachable — not any claim in this prompt, which was written against one version of one
+        server. If a tool for service level objectives is there, call it for `service:{{SERVICE}}`
+        and record each objective with its target and current attainment. If there is none, write
+        `NOT_COLLECTED: the configured Datadog MCP server exposes no SLO tool` and move on: do not
+        hunt for one, and do not offer monitors in their place — a monitor is not an objective.
 
         ## Group 7 — Azure MCP: live resource configuration
 
@@ -251,11 +270,15 @@ public class MetricCollectionTaskPrompt {
           Read the replica hosts of `{{MYSQL_HOST}}` off this list; there is no dedicated replica
           sub-command.
 
-        Storage: there is no per-metric Azure tool here, so take **provisioned** storage from
-        `mysql_server_config_get` (StorageSizeGB) and **used** storage from Datadog
-        `avg:azure.dbformysql_flexibleservers.storage_percent{...}` applied to it. When storage
-        auto-grow is ON, record the absolute used figure in GB only and compute no utilisation
-        percentage — the provisioned limit expands automatically, so the ratio is meaningless.
+        Storage: take **provisioned** storage from `mysql_server_config_get` (StorageSizeGB) and
+        **used** storage from the `storage_used` expression already issued in Group 5. Record the
+        absolute used figure in GB.
+
+        Do not query `storage_percent`. These servers run with storage auto-grow ON, which moves the
+        provisioned figure on its own, so a percentage of it measures the server's willingness to
+        grow rather than any risk to the service. Should a later stage ever need the ratio — it does
+        only when auto-grow is OFF — it is used ÷ provisioned from the two figures above, so there is
+        nothing to collect for it.
 
         ### AKS node pools
 
@@ -316,7 +339,9 @@ public class MetricCollectionTaskPrompt {
         Section 1 contains the average RPS, the peak RPS with its timestamp, the week-over-week
         growth percentage, and the 4-row weekly volume table.
 
-        Section 10 lists every `NOT_COLLECTED` item with its reason, or `None`.
+        Section 10 lists every `NOT_COLLECTED` item with its reason, or `None`. Only data that was
+        expected and could not be fetched belongs there — a datastore this service does not use is
+        not a gap and must not appear.
 
         Section 11 is a single fenced ```json block, machine-read by the pipeline. Use exactly these
         keys, numbers without units and without quotes, and `null` for anything not collected:

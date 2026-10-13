@@ -94,6 +94,21 @@ export const STAGE_MODEL_DEFAULTS: Record<string, string> = {
   validation_model: "gemini-3.5-flash",
 };
 
+/**
+ * What the run is doing right now, as a label.
+ *
+ * Code analysis runs beside the infra and metric stages, so there can be two at once and the job's
+ * own `current_stage` is only whichever reported last. The per-stage statuses are the honest answer.
+ */
+export const runningStageLabel = (
+  stages: Array<{name: string; status: StageStatus}> | null | undefined,
+  currentStage: string | null | undefined
+): string => {
+  const running = (stages ?? []).filter(stage => stage.status === "RUNNING");
+  if (running.length === 0) return currentStage ? (STAGE_LABELS[currentStage] ?? currentStage) : "starting";
+  return running.map(stage => STAGE_LABELS[stage.name] ?? stage.name).join(" + ");
+};
+
 export const DEFAULT_POLL_INTERVAL_MS = 3000;
 /** Polling slows down rather than stopping when the tab is hidden, to stay off the database. */
 export const HIDDEN_POLL_INTERVAL_MS = 15000;

@@ -122,7 +122,7 @@ public class GeminiCliService {
             byte[] stdoutBytes = process.getInputStream().readAllBytes();
             boolean finished = process.waitFor(request.timeoutMinutes(), TimeUnit.MINUTES);
             if (!finished) {
-                process.destroyForcibly();
+                ProcessRunner.destroyTree(process);
                 throw new IllegalStateException("Gemini CLI timed out after " + request.timeoutMinutes() + " minutes");
             }
             long durationMs = System.currentTimeMillis() - startMs;

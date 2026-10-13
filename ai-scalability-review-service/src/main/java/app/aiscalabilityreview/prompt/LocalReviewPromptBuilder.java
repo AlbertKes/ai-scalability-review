@@ -269,9 +269,26 @@ public class LocalReviewPromptBuilder {
             .replace("{{KAFKA_CONSUMER_GROUPS}}", nvl(p.kafkaConsumerGroups, NOT_AVAILABLE))
             .replace("{{INFRA_REPO_PATH}}", nvl(p.localInfraRepoPath, "not provided"))
             .replace("{{APP_REPO_PATH}}", nvl(p.localAppRepoPath, "not provided"))
+            .replace("{{APP_SOURCE_ROOTS}}", appSourceRoots(p.localAppRepoPath, p.appCodePaths))
             .replace("{{INFRA_CONTEXT_PATH}}", p.infraContextPath)
             .replace("{{MYSQL_TABLES_PATH}}", p.mysqlTablesPath)
             .replace("{{OUTPUT_PATH}}", p.outputPath);
+    }
+
+    /**
+     * Where this service's own code lives, for the stage that re-reads it.
+     *
+     * <p>Naming the modules rather than the repository root is the difference between opening a
+     * file and searching a monorepo for it: the measured validation stage spent 49 tool calls, and
+     * every application file it ended up citing was inside the three modules the request already
+     * named.
+     */
+    private static String appSourceRoots(String appRepoPath, List<String> codePaths) {
+        if (appRepoPath == null) return "not provided";
+        if (codePaths == null || codePaths.isEmpty()) return appRepoPath;
+        return codePaths.stream()
+            .map(path -> appRepoPath + '/' + trimSlashes(path))
+            .collect(Collectors.joining("\n- ", "\n- ", ""));
     }
 
     private static boolean isAbsent(String value) {
@@ -333,6 +350,7 @@ public class LocalReviewPromptBuilder {
         public String infraContextPath;
         public String localInfraRepoPath;
         public String localAppRepoPath;
+        public List<String> appCodePaths;
         public String env;
         public String namespace;
         public String mysqlHost;

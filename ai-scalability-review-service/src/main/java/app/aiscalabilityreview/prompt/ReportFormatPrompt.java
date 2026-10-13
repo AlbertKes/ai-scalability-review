@@ -123,7 +123,7 @@ public class ReportFormatPrompt {
         | **MySQL Version** | <version> (HA: <SameZone/ZoneRedundant/Disabled>) OR N/A |
         | **Storage** | <size>GB (Auto-grow: ON/OFF, IO Scaling: ON/OFF) OR N/A |
         | **Read Replica** | `<host>` (HA: ON/OFF) OR N/A |
-        | **Atlas MongoDB** | `<cluster name>` (<tier>, <n> electable nodes) OR N/A |
+        | **Atlas MongoDB** | `<cluster name>` (<tier>, <n> electable nodes) — omit this row entirely when the service uses no MongoDB |
         ```
 
         Rules:
@@ -187,6 +187,8 @@ public class ReportFormatPrompt {
 
         ### 3.5 Persistence Layer / DB Saturation
         MySQL rows are omitted when the service uses no MySQL; MongoDB rows when it uses no MongoDB.
+        Omitted means absent from the report — not present with `N/A`, and not present with a
+        `NOT_COLLECTED` line. A datastore the service does not have is not a gap in the data.
         - **Connection Pool**: average `<value>` (`<value>%` of max_connections `<value>`), peak `<value>` (`<value>%`) [Source: ...]
         - **Slow queries**: `<value>` per day average, worst day `<value>` [Source: ...]
         - **Replication lag**: average `<value> s`, peak `<value> s` [Source: ...]

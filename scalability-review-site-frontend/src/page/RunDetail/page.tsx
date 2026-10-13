@@ -18,7 +18,7 @@ import {
 import {useLoadingStatus, useNavigate, useParams} from "@wonder/core-fe";
 import {useEffect, useState} from "react";
 import {RunStatusTag} from "@/components/StatusTag";
-import {isTerminal, STAGE_LABELS} from "@/constants/review";
+import {isTerminal, runningStageLabel, STAGE_LABELS} from "@/constants/review";
 import {COMPARE_PATH} from "@/route";
 import {elapsedSince, formatCost, formatDateTime, formatDuration, formatTokens, utcHint} from "@/utils/format";
 import {useRuntimeState} from "@/utils/useRuntimeState";
@@ -104,8 +104,7 @@ export default function RunDetail() {
                 <Space size={4}>
                   <Spin size="small" />
                   <Typography.Text type="secondary">
-                    {STAGE_LABELS[job.current_stage ?? ""] ?? job.current_stage ?? "starting"} ·{" "}
-                    {elapsedSince(job.started_at, now)}
+                    {runningStageLabel(job.stages, job.current_stage)} · {elapsedSince(job.started_at, now)}
                   </Typography.Text>
                 </Space>
               ) : null}

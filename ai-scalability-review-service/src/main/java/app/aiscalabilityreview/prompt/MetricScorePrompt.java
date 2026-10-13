@@ -123,8 +123,8 @@ public class MetricScorePrompt {
         | **Replication lag — 28-day average** | < 1 s | 1 – 5 s | > 5 s |
         | **Replication lag — peak observed** | < 10 s | 10 – 60 s | > 60 s |
         | **Missing indexes on high-frequency query columns** | None found | 1 missing | ≥ 2 missing |
-        | **DB storage used — absolute (GB)** when auto-grow is ON (Azure MCP) | < 100 GB | 100 – 500 GB | > 500 GB |
-        | **DB storage used — % of provisioned** when auto-grow is OFF (Azure MCP) | < 50 % | 50 % – 75 % | > 75 % |
+        | **DB storage used — absolute (GB)** (Datadog `storage_used`) | < 100 GB | 100 – 500 GB | > 500 GB |
+        | **DB storage used — % of provisioned**, only when auto-grow is OFF (used ÷ StorageSizeGB) | < 50 % | 50 % – 75 % | > 75 % |
         | **Largest single table size** (MySQL) | < 5 GB | 5 – 10 GB | > 10 GB |
         | **Number of tables > 10 GB** (MySQL) | 0 | 1 | ≥ 2 |
         
@@ -163,7 +163,7 @@ public class MetricScorePrompt {
         | Latency & Thread Concurrency | P99 average & peak | P99 avg > 500 ms **or** missing circuit breakers on critical path |
         | Error Rates & Stability | HTTP error rate, restarts | Any restart = YELLOW; error rate > 1 % = RED |
         | Resource Saturation | Peak CPU/mem % of limit | Peak CPU > 90 % limit **or** HPA effective trigger (`averageUtilization × request/limit`) ≥ 86 % of limit |
-        | Persistence Layer | Connections %, slow queries, replication lag, storage % (Azure MCP), largest table (MySQL) | Connections > 85 % limit **or** replication lag peak > 60 s **or** storage > 75 % **or** any table > 10 GB |
+        | Persistence Layer | Connections %, slow queries, replication lag, storage used GB (Datadog), largest table (MySQL) | Connections > 85 % limit **or** replication lag peak > 60 s **or** storage used > 500 GB (> 75 % of provisioned when auto-grow is OFF) **or** any table > 10 GB |
             """;
     }
 }

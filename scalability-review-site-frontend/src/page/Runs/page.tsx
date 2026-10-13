@@ -5,7 +5,7 @@ import {useLoadingStatus, useLocation, useNavigate} from "@wonder/core-fe";
 import {useEffect, useState} from "react";
 import {ScoreBadge} from "@/components/ScoreBadge";
 import {RunStatusTag} from "@/components/StatusTag";
-import {RUN_STATUSES, SCORES, STAGE_LABELS, VALIDATION_VERDICTS} from "@/constants/review";
+import {runningStageLabel, RUN_STATUSES, SCORES, VALIDATION_VERDICTS} from "@/constants/review";
 import {COMPARE_PATH, RUN_DETAIL_PATH} from "@/route";
 import {downloadCsv} from "@/utils/csv";
 import {formatCost, formatDuration, formatShortDateTime, formatTokens} from "@/utils/format";
@@ -166,10 +166,10 @@ export default function Runs() {
     },
     {
       title: "Stage",
-      width: 150,
+      width: 170,
       render: (_, job) =>
-        job.current_stage ? (
-          <Typography.Text type="secondary">{STAGE_LABELS[job.current_stage] ?? job.current_stage}</Typography.Text>
+        job.current_stage || job.stages?.some(stage => stage.status === "RUNNING") ? (
+          <Typography.Text type="secondary">{runningStageLabel(job.stages, job.current_stage)}</Typography.Text>
         ) : (
           "—"
         ),

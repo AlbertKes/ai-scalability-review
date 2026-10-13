@@ -3,8 +3,9 @@ package app.aiscalabilityreview.job;
 import app.aiscalabilityreview.service.GeminiCliService.GeminiRunResult;
 import core.framework.util.Strings;
 
-import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Per-run cost and latency accounting for a local review (AD-6383).
@@ -35,12 +36,17 @@ public class LocalReviewRunStats {
     private static final String FOOTER_TEMPLATE = """
 
         **Total tokens**: {} (budget {})
-        **Total duration**: {} s (budget {} s)
+        **Stage time**: {} s (sum of the stages; they overlap, so this exceeds the wall clock)
+        **Wall clock**: {} s (budget {} s)
         **MCP tool calls**: {}
         **Within budget**: {}
         """;
 
-    private final List<StageStat> stages = new ArrayList<>();
+    /**
+     * Written from more than one thread: code analysis runs alongside the infra and metric stages,
+     * and both report into this. Copy-on-write is the right shape for five writes and one read.
+     */
+    private final List<StageStat> stages = new CopyOnWriteArrayList<>();
 
     public void record(String stage, GeminiRunResult result) {
         stages.add(new StageStat(stage, result.model(), result.durationMs(), result.inputTokens(),
@@ -56,6 +62,7 @@ public class LocalReviewRunStats {
         return stages.stream().mapToLong(stage -> stage.inputTokens + stage.outputTokens).sum();
     }
 
+    /** Sum of the stage durations. Exceeds the wall clock whenever stages overlap. */
     public long totalDurationMs() {
         return stages.stream().mapToLong(stage -> stage.durationMs).sum();
     }
@@ -64,25 +71,37 @@ public class LocalReviewRunStats {
         return stages.stream().mapToInt(stage -> stage.mcpToolCalls).sum();
     }
 
-    public boolean withinBudget() {
-        return totalTokens() <= TOKEN_BUDGET && totalDurationMs() <= DURATION_BUDGET_MS;
+    /**
+     * Budget is judged on the wall clock, not on the sum of the stage durations: those overlap now
+     * that code analysis runs beside the infra and metric stages, and judging a run against a total
+     * no clock ever showed would make the budget meaningless.
+     */
+    public boolean withinBudget(long wallClockMs, long tokenBudget, long durationBudgetMs) {
+        return wallClockMs <= durationBudgetMs && totalTokens() <= tokenBudget;
     }
 
-    public String summaryLine() {
-        return Strings.format("totalTokens={}, budget={}, totalDurationMs={}, budgetMs={}, mcpToolCalls={}, withinBudget={}",
-            totalTokens(), TOKEN_BUDGET, totalDurationMs(), DURATION_BUDGET_MS, totalMcpToolCalls(), withinBudget());
+    public String summaryLine(long wallClockMs, long tokenBudget, long durationBudgetMs) {
+        return Strings.format("totalTokens={}, budget={}, wallClockMs={}, budgetMs={}, mcpToolCalls={}, withinBudget={}",
+            totalTokens(), tokenBudget, wallClockMs, durationBudgetMs, totalMcpToolCalls(),
+            withinBudget(wallClockMs, tokenBudget, durationBudgetMs));
     }
 
-    public String render(String serviceId, String jobId) {
+    /** Rows follow the pipeline order, not the order the stages happened to finish in. */
+    public String render(String serviceId, String jobId, long wallClockMs, long tokenBudget, long durationBudgetMs) {
         StringBuilder sb = new StringBuilder(2048);
         sb.append(Strings.format(HEADER_TEMPLATE, serviceId, jobId));
-        for (StageStat stage : stages) {
+        stages.stream().sorted(Comparator.comparingInt(stage -> pipelineOrder(stage.stage))).forEach(stage ->
             sb.append(Strings.format(ROW_TEMPLATE, stage.stage, stage.model, stage.durationMs / 1000,
-                stage.inputTokens, stage.outputTokens, stage.cachedTokens, stage.toolCalls, stage.mcpToolCalls));
-        }
-        sb.append(Strings.format(FOOTER_TEMPLATE, totalTokens(), TOKEN_BUDGET, totalDurationMs() / 1000,
-            DURATION_BUDGET_MS / 1000, totalMcpToolCalls(), withinBudget() ? "yes" : "NO"));
+                stage.inputTokens, stage.outputTokens, stage.cachedTokens, stage.toolCalls, stage.mcpToolCalls)));
+        sb.append(Strings.format(FOOTER_TEMPLATE, totalTokens(), tokenBudget, totalDurationMs() / 1000,
+            wallClockMs / 1000, durationBudgetMs / 1000, totalMcpToolCalls(),
+            withinBudget(wallClockMs, tokenBudget, durationBudgetMs) ? "yes" : "NO"));
         return sb.toString();
+    }
+
+    private int pipelineOrder(String stage) {
+        int index = LocalReviewStages.indexOf(stage);
+        return index < 0 ? Integer.MAX_VALUE : index;
     }
 
     private record StageStat(String stage,

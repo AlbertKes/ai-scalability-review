@@ -102,7 +102,7 @@ public class LocalReviewService {
         }
         boolean stopped = runRegistry.cancel(jobId);
         if (!stopped) {
-            reviewService.markStale(job, "No process behind this run — it did not survive a restart.");
+            reviewService.markStale(jobId, "No process behind this run — it did not survive a restart.");
             notificationService.raise(new NotificationService.NotificationRequest(jobId, job.serviceId,
                 NotificationService.TYPE_RUN_STALE, NotificationService.SEVERITY_WARNING,
                 "Run marked stale — " + job.serviceId, "Nothing was running behind it, so it was not cancelled."));
@@ -114,13 +114,12 @@ public class LocalReviewService {
 
     public LocalReviewJobActionResponse update(String jobId, UpdateLocalReviewJobRequest request) {
         ReviewJob job = reviewService.getReviewJob(jobId).orElseThrow(() -> new NotFoundException("Run not found: " + jobId));
-        if (request.note != null) job.note = request.note;
-        if (request.labels != null) job.labels = request.labels;
-        if (request.baseline != null) {
-            if (Boolean.TRUE.equals(request.baseline)) reviewService.clearBaseline(job.serviceId);
-            job.baseline = request.baseline;
-        }
-        reviewService.updateJob(job);
+        if (Boolean.TRUE.equals(request.baseline)) reviewService.clearBaseline(job.serviceId);
+        reviewService.mutateJob(jobId, stored -> {
+            if (request.note != null) stored.note = request.note;
+            if (request.labels != null) stored.labels = request.labels;
+            if (request.baseline != null) stored.baseline = request.baseline;
+        });
         return action(jobId, job.status, "Run updated.");
     }
 

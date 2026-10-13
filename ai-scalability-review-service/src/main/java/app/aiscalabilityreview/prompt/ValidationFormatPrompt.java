@@ -90,7 +90,7 @@ public class ValidationFormatPrompt {
         
         **[WARNING]** MySQL storage used
           - Reported: `312 GB`
-          - Actual: `329 GB` [Source: Azure MCP → get_metric(resource=wonder-cart-mysql-prod, metric=storage_used)]
+          - Actual: `329 GB` [Source: Datadog MCP → query_metrics("max:azure.dbformysql_flexibleservers.storage_used{name:wonder-cart-mysql-prod}.rollup(max, 86400)")]
           - Detail: 5.4% increase since report generation (within 10% tolerance for growing storage).
         
         ### Summary

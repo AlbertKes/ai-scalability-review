@@ -106,8 +106,9 @@ public class ReviewTaskPrompt {
         - `mem_avg_pct_of_limit = mem_avg_mib / mem_limit_mib × 100`
         - `mem_peak_pct_of_limit = mem_peak_mib / mem_limit_mib × 100`
         - MySQL connections as a percentage of `max_connections`, average and peak.
-        - MySQL storage utilisation **only** when auto-grow is OFF; when it is ON, score the
-          absolute GB figure instead.
+        - MySQL storage: score the absolute used GB. Derive a utilisation percentage
+          (used ÷ provisioned) **only** when auto-grow is OFF — with auto-grow ON the provisioned
+          figure expands by itself, so the ratio tracks Azure's behaviour rather than the service's.
 
         Show both the absolute value and the computed percentage in the report, and state the limit
         you divided by so the arithmetic is reproducible.

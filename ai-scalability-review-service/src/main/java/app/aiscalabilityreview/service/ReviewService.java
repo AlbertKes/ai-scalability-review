@@ -20,16 +20,31 @@ import org.slf4j.LoggerFactory;
 
 import java.time.ZonedDateTime;
 import java.util.LinkedHashMap;
+import java.util.function.Consumer;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.stream.IntStream;
 
 /**
  * Core service managing all MongoDB CRUD for service configs, review jobs,
  * reports, feedback, comparisons, and validation results.
  */
 public class ReviewService {
+    /**
+     * Every mutation of a job is a read-modify-write of the whole document, so two writers racing
+     * lose one of the two updates. That became reachable the moment code analysis started running
+     * alongside the infra and metric stages: both report their status into the same
+     * {@code stage_statuses} map. Striped rather than per-job so the table cannot grow without
+     * bound; 64 stripes is far more than a local console ever needs.
+     */
+    private static final int JOB_LOCK_STRIPES = 64;
+
     private final Logger logger = LoggerFactory.getLogger(ReviewService.class);
+    private final List<ReentrantLock> jobLocks = IntStream.range(0, JOB_LOCK_STRIPES)
+        .mapToObj(stripe -> new ReentrantLock())
+        .toList();
     @Inject
     MongoCollection<ReviewJob> reviewJobCollection;
     @Inject
@@ -115,31 +130,28 @@ public class ReviewService {
 
     /** Marks a run as waiting for a concurrency slot, so the list can show it as queued. */
     public void markQueued(String jobId) {
-        ReviewJob job = reviewJobCollection.get(jobId).orElse(null);
-        if (job == null) return;
-        job.status = ReviewJob.STATUS_QUEUED;
-        reviewJobCollection.replace(job);
+        mutateJob(jobId, job -> job.status = ReviewJob.STATUS_QUEUED);
     }
 
     public void cancelJob(String jobId, String cancelledBy) {
-        ReviewJob job = reviewJobCollection.get(jobId).orElse(null);
-        if (job == null) return;
-        job.status = ReviewJob.STATUS_CANCELLED;
-        job.cancelledAt = ZonedDateTime.now();
-        job.cancelledBy = cancelledBy;
-        job.completedAt = job.cancelledAt;
-        reviewJobCollection.replace(job);
+        mutateJob(jobId, job -> {
+            job.status = ReviewJob.STATUS_CANCELLED;
+            job.cancelledAt = ZonedDateTime.now();
+            job.cancelledBy = cancelledBy;
+            job.completedAt = job.cancelledAt;
+        });
     }
 
     /**
      * Marks a run whose process no longer exists. Used at startup: a job left RUNNING by a restart
      * has no one behind it, and a spinner that never resolves is worse than an honest dead end.
      */
-    public void markStale(ReviewJob job, String reason) {
-        job.status = ReviewJob.STATUS_STALE;
-        job.errorMessage = reason;
-        job.completedAt = ZonedDateTime.now();
-        reviewJobCollection.replace(job);
+    public void markStale(String jobId, String reason) {
+        mutateJob(jobId, job -> {
+            job.status = ReviewJob.STATUS_STALE;
+            job.errorMessage = reason;
+            job.completedAt = ZonedDateTime.now();
+        });
     }
 
     /** Only one run per service can be the baseline, so setting one clears the rest. */
@@ -186,38 +198,55 @@ public class ReviewService {
         return reviewJobCollection.find(query);
     }
 
+    /**
+     * Reads, mutates and writes one job under its stripe, so concurrent stages cannot overwrite
+     * each other. Every mutation of a job document goes through here.
+     */
+    public void mutateJob(String jobId, Consumer<ReviewJob> mutation) {
+        ReentrantLock lock = jobLocks.get(Math.floorMod(jobId.hashCode(), JOB_LOCK_STRIPES));
+        lock.lock();
+        try {
+            ReviewJob job = reviewJobCollection.get(jobId).orElse(null);
+            if (job == null) return;
+            mutation.accept(job);
+            reviewJobCollection.replace(job);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * {@code currentStage} is last-writer-wins while two stages run at once. The per-stage statuses
+     * are the authoritative view of what is happening, and the console renders those.
+     */
     public void updateJobStatus(String jobId, String status, String currentStage) {
-        ReviewJob job = reviewJobCollection.get(jobId).orElse(null);
-        if (job == null) return;
-        job.status = status;
-        job.currentStage = currentStage;
-        reviewJobCollection.replace(job);
+        mutateJob(jobId, job -> {
+            job.status = status;
+            job.currentStage = currentStage;
+        });
     }
 
     public void updateJobStageStatus(String jobId, String stageName, ReviewJob.StageStatus stageStatus) {
-        ReviewJob job = reviewJobCollection.get(jobId).orElse(null);
-        if (job == null) return;
-        if (job.stageStatuses == null) job.stageStatuses = new LinkedHashMap<>();
-        job.stageStatuses.put(stageName, stageStatus);
-        reviewJobCollection.replace(job);
+        mutateJob(jobId, job -> {
+            if (job.stageStatuses == null) job.stageStatuses = new LinkedHashMap<>();
+            job.stageStatuses.put(stageName, stageStatus);
+        });
     }
 
     public void completeJob(String jobId, String reportId) {
-        ReviewJob job = reviewJobCollection.get(jobId).orElse(null);
-        if (job == null) return;
-        job.status = "COMPLETED";
-        job.reportId = reportId;
-        job.completedAt = ZonedDateTime.now();
-        reviewJobCollection.replace(job);
+        mutateJob(jobId, job -> {
+            job.status = ReviewJob.STATUS_COMPLETED;
+            job.reportId = reportId;
+            job.completedAt = ZonedDateTime.now();
+        });
     }
 
     public void failJob(String jobId, String errorMessage) {
-        ReviewJob job = reviewJobCollection.get(jobId).orElse(null);
-        if (job == null) return;
-        job.status = "FAILED";
-        job.errorMessage = errorMessage;
-        job.completedAt = ZonedDateTime.now();
-        reviewJobCollection.replace(job);
+        mutateJob(jobId, job -> {
+            job.status = ReviewJob.STATUS_FAILED;
+            job.errorMessage = errorMessage;
+            job.completedAt = ZonedDateTime.now();
+        });
     }
 
     // ---- ReviewReport ----

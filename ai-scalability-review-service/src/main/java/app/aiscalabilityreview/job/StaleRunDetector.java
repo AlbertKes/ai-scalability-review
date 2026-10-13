@@ -40,7 +40,7 @@ public class StaleRunDetector {
         List<ReviewJob> jobs = reviewJobCollection.find(query);
         for (ReviewJob job : jobs) {
             if (runRegistry.isTracked(job.jobId)) continue;
-            reviewService.markStale(job, REASON);
+            reviewService.markStale(job.jobId, REASON);
             notificationService.raise(new NotificationRequest(job.jobId, job.serviceId,
                 NotificationService.TYPE_RUN_STALE, NotificationService.SEVERITY_WARNING,
                 "Run marked stale — " + job.serviceId, REASON));

@@ -47,6 +47,20 @@ public final class ProcessRunner {
         }
     }
 
+    /**
+     * Kills a process and everything it spawned.
+     *
+     * <p>Destroying the direct child is not enough for the Gemini CLI: its launcher re-executes
+     * itself as a child with a larger heap, so killing what we started leaves the real process
+     * orphaned onto init, still running and still spending tokens. Descendants go first — once the
+     * parent dies they are reparented and harder to find.
+     */
+    public static void destroyTree(Process process) {
+        if (process == null || !process.isAlive()) return;
+        process.descendants().forEach(ProcessHandle::destroyForcibly);
+        process.destroyForcibly();
+    }
+
     private static String readOutput(Process process) throws IOException {
         try (InputStream stream = process.getInputStream()) {
             return new String(stream.readNBytes(OUTPUT_LIMIT), StandardCharsets.UTF_8);

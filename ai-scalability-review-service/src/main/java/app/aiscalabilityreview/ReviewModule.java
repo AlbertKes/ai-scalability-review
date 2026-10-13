@@ -8,6 +8,7 @@ import app.aiscalabilityreview.api.SettingsWebService;
 import app.aiscalabilityreview.job.ConfluenceFeedbackSyncJob;
 import app.aiscalabilityreview.job.LocalReviewJobExecutor;
 import app.aiscalabilityreview.job.LocalReviewRunFinalizer;
+import app.aiscalabilityreview.job.LocalReviewRunPreparer;
 import app.aiscalabilityreview.job.LocalReviewRunRegistry;
 import app.aiscalabilityreview.job.LocalReviewStageRunner;
 import app.aiscalabilityreview.job.StaleRunDetector;
@@ -112,6 +113,7 @@ public class ReviewModule extends Module {
         bind(ReviewJobExecutor.class);
         bind(ReviewJobService.class);
         bind(LocalReviewStageRunner.class);
+        bind(LocalReviewRunPreparer.class);
         bind(LocalReviewRunFinalizer.class);
         bind(LocalReviewJobExecutor.class);
         bind(LocalReviewService.class);
