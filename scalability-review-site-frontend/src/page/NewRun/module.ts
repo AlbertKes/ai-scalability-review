@@ -3,6 +3,7 @@ import {LocalReviewAJAXWebService} from "@/service/LocalReviewAJAXWebService";
 import {ReviewAJAXWebService} from "@/service/ReviewAJAXWebService";
 import {SettingsAJAXWebService} from "@/service/SettingsAJAXWebService";
 import {successToast, warningToast} from "@/components/Message";
+import {VALIDATION_STAGES} from "@/constants/review";
 import {RUN_DETAIL_PATH} from "@/route";
 import type {RootState} from "type/state";
 import type {GenerateLocalReviewRequest, LocalReviewRequestView, ReviewJobView} from "type/api";
@@ -10,9 +11,10 @@ import {emptyRequest, initialState} from "./state";
 import {PREFLIGHTING, SUBMITTING, VALIDATING, type CostEstimate} from "./type";
 
 const ESTIMATE_SAMPLE_SIZE = 5;
-const SKIPPABLE_STAGES: Record<string, string> = {
-  skip_code_analysis: "STAGE_1_CODE_ANALYSIS",
-  skip_validation: "STAGE_5_VALIDATION",
+/** skip_validation drops the whole validation group, which is four stages rather than one. */
+const SKIPPABLE_STAGES: Record<string, string[]> = {
+  skip_code_analysis: ["STAGE_1_CODE_ANALYSIS"],
+  skip_validation: [...VALIDATION_STAGES, "STAGE_5_VALIDATION"],
 };
 
 class NewRunModule extends Module<RootState, "NewRun"> {
@@ -96,6 +98,7 @@ class NewRunModule extends Module<RootState, "NewRun"> {
       output_base_dir: request.output_base_dir,
       mysql_host: request.mysql_host,
       mysql_db: request.mysql_db,
+      atlas_cluster: request.atlas_cluster,
     });
     this.setState({preflight: response.checks});
   }
@@ -158,7 +161,7 @@ function buildEstimate(jobs: ReviewJobView[], request: LocalReviewRequestView): 
   const skipped = new Set(
     Object.entries(SKIPPABLE_STAGES)
       .filter(([flag]) => Boolean(request[flag as keyof LocalReviewRequestView]))
-      .map(([, stage]) => stage)
+      .flatMap(([, stages]) => stages)
   );
 
   let tokens = 0;

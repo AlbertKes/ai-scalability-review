@@ -209,8 +209,8 @@ public class LocalReviewValidator {
         if (Boolean.TRUE.equals(request.skipValidation)) {
             issues.add(warning("skip_validation", "VALIDATION_SKIPPED",
                 "Validation is skipped, so the report carries no verdict.",
-                "It roughly halves the MCP round-trips of a run; the eight checks are what make the report "
-                + "checkable rather than merely plausible."));
+                "It drops stages 5A to 5D, which is where most of a run's MCP round-trips are; the eight "
+                + "checks are what make the report checkable rather than merely plausible."));
         }
     }
 

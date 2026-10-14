@@ -1,182 +1,111 @@
 package app.aiscalabilityreview.prompt;
 
-public class ValidationFormatPrompt {
-    /**
-     * Validation report format specification.
-     */
+/**
+ * The output contract of one validation session: the shape of a check section, and the instruction
+ * to write nothing around it.
+ *
+ * <p>This used to specify the whole validation report — header, summary table, overall verdict,
+ * footer — and the model wrote all of it. With the checks split across three sessions no single
+ * session can see enough to write a summary table, so
+ * {@link app.aiscalabilityreview.service.ValidationReportAssembler} builds those parts from the
+ * three partials instead. That is not only a consequence of the split but a correctness gain: the
+ * verdict and the issue counts are now derived from the findings rather than asserted alongside
+ * them, which is what a report whose summary disagreed with its own sections used to cost a reader.
+ *
+ * <p>Placeholders: {@code {{CHECK_HEADERS}}}, {@code {{OUTPUT_PATH}}}.
+ */
+public final class ValidationFormatPrompt {
     public static final String CONTENT;
+
+    /** Where a validation session that writes a file puts its sections. Placeholder: {@code {{OUTPUT_PATH}}}. */
+    public static final String FILE_OUTPUT;
+
+    /** The same contract for a one-shot call that has no file system to write to. */
+    public static final String RESPONSE_OUTPUT;
 
     static {
         CONTENT = """
-        # Validation Report Format
-        
-        This file defines the mandatory output format for scalability review validation reports.
-        
-        **File naming**: `reports/<service>/<YYYY-MM-DD>-validation.md`
-        
-        Example: `reports/wonder-cart-service/2026-07-10-validation.md`
-        
-        ---
-        
-        ## Section Order (mandatory)
-        
-        1. Validation Header
-        2. Validation Summary Table
-        3. Check Results (all 7 checks, in order)
-        4. Overall Verdict
-        5. Footer
-        
-        ---
-        
-        ## 1. Validation Header
-        
+        # Output Format
+
+        Write one section per check you own, in ascending check number, using exactly these headers:
+
+        {{CHECK_HEADERS}}
+
+        The `<STATUS>` on the header line is the status of the check as a whole:
+
+        - **PASS** — every finding in it is PASS, or the check was fully SKIPPED
+        - **WARNING** — at least one WARNING finding and no FAIL findings
+        - **FAIL** — at least one FAIL finding
+        - **SKIPPED** — the entire check is not applicable (e.g., MySQL checks when MYSQL_HOST is N/A)
+
+        Each section carries its findings in the Finding Format given above, then a short summary:
+
         ```markdown
-        # Validation Report: <service> (<env>)
-        **Original Report**: `<REPORT_FILE path>`
-        **Original Report Date**: <YYYY-MM-DD>
-        **Validation Run Date**: <YYYY-MM-DD>
-        **Validator**: <AI model name or engineer name>
-        ---
-        ```
-        
-        ---
-        
-        ## 2. Validation Summary Table
-        
-        A single table summarizing the result of all 8 checks. Always include all 8 rows.
-        
-        ```markdown
-        ## Validation Summary
-        
-        | # | Check | Status | Issues |
-        |---|-------|--------|--------|
-        | 1 | Config Accuracy | PASS / FAIL / WARNING / SKIPPED | <n> issue(s) |
-        | 2 | Metric Numerical Fidelity | PASS / FAIL / WARNING / SKIPPED | <n> issue(s) |
-        | 3 | Cross-Source Metric Consistency | PASS / FAIL / WARNING / SKIPPED | <n> issue(s) |
-        | 4 | Scoring Accuracy | PASS / FAIL / WARNING / SKIPPED | <n> issue(s) |
-        | 5 | Capacity Projection Math | PASS / FAIL / WARNING / SKIPPED | <n> issue(s) |
-        | 6 | NOT_COLLECTED Authenticity | PASS / FAIL / WARNING / SKIPPED | <n> issue(s) |
-        | 7 | Format & Attribution Completeness | PASS / FAIL / WARNING / SKIPPED | <n> issue(s) |
-        | 8 | Recommendation Soundness | PASS / FAIL / WARNING / SKIPPED | <n> issue(s) |
-        ```
-        
-        **Row-level status rules**:
-        - A check is **PASS** if all its individual findings are PASS (or the check was fully SKIPPED).
-        - A check is **WARNING** if it has at least one WARNING and no FAIL findings.
-        - A check is **FAIL** if it has at least one FAIL finding.
-        - A check is **SKIPPED** only if the entire check is not applicable (e.g., MySQL checks when MYSQL_HOST is N/A).
-        
-        ---
-        
-        ## 3. Check Results
-        
-        Output one section per check in the fixed order below. Always include all 8 sections.
-        Use "Status: SKIPPED — <reason>" for inapplicable checks (e.g., MySQL checks when MYSQL_HOST is N/A).
-        
-        ```markdown
-        ## Check 1 — Config Accuracy: <PASS | FAIL | WARNING | SKIPPED>
-        
+        ## Check <n> — <the name given above>: FAIL
+
         ### Findings
-        
+
         **[PASS]** CPU requests (K8s deployment)
           - Reported: `500m`
           - Actual: `500m` [Source: code → k8s-gitops/environments/prod/apps/wonder/deployment.yaml:L42]
           - Detail: Exact match.
-        
+
         **[FAIL]** HPA maxReplicas
           - Reported: `20`
           - Actual: `15` [Source: code → k8s-gitops/environments/prod/apps/wonder/hpa.yaml:L18]
           - Detail: Report overstates maxReplicas by 5. Likely copied from an older manifest version.
-        
+
         **[WARNING]** MySQL storage used
           - Reported: `312 GB`
           - Actual: `329 GB` [Source: Datadog MCP → query_metrics("max:azure.dbformysql_flexibleservers.storage_used{name:wonder-cart-mysql-prod}.rollup(max, 86400)")]
           - Detail: 5.4% increase since report generation (within 10% tolerance for growing storage).
-        
+
         ### Summary
-        <1–2 sentences summarizing the overall config accuracy result.>
+        <1–2 sentences summarizing the overall result of this check.>
         ```
-        
-        *(Repeat this structure for all 7 checks.)*
-        
-        ### Check section headers
-        
-        Use these exact headers in order:
-        
-        ```
-        ## Check 1 — Config Accuracy: <STATUS>
-        ## Check 2 — Metric Numerical Fidelity: <STATUS>
-        ## Check 3 — Cross-Source Metric Consistency: <STATUS>
-        ## Check 4 — Scoring Accuracy: <STATUS>
-        ## Check 5 — Capacity Projection Math: <STATUS>
-        ## Check 6 — NOT_COLLECTED Authenticity: <STATUS>
-        ## Check 7 — Format & Attribution Completeness: <STATUS>
-        ## Check 8 — Recommendation Soundness: <STATUS>
-        ```
-        
+
         ---
-        
-        ## 4. Overall Verdict
-        
-        ```markdown
-        ## Overall Validation Verdict: <PASS | CONDITIONAL PASS | FAIL>
-        ```
-        
-        **Verdict rules**:
-        - **PASS** — No FAIL findings across all checks; at most minor WARNINGs. Report can be trusted as-is.
-        - **CONDITIONAL PASS** — Has WARNINGs but no FAILs. Report is usable; reviewer should note caveats below.
-        - **FAIL** — At least one FAIL finding. Report contains inaccuracies that must be corrected before use.
-        
-        ```markdown
-        ### Critical Issues
-        *(List all FAIL findings in brief. Omit this section if verdict is PASS.)*
-        
-        - **[Check 1]** HPA maxReplicas overstated: report says 20, actual is 15.
-        - **[Check 4]** Dimension 5 score: report says YELLOW, but cited metrics compute to RED
-          (MySQL connection avg 78% > 75% RED threshold).
-        - **[Check 8]** Recommendation 5 is false: the semaphore it says was disabled is active with
-          5 permits in every environment (`app.semaphore.permits=5`).
-        
-        ### Warnings
-        *(List all WARNING findings in brief. Omit this section if there are no warnings.)*
-        
-        - **[Check 2]** Peak RPS differs by 22% (report: 340 RPS, current: 278 RPS); within tolerance
-          but notable given the 28-day window rolled.
-        - **[Check 5]** +4Q growth factor rounding: report 1.612×, computed 1.608× (0.2% off).
-        - **[Check 8]** Recommendation 6 is half-implemented already: the handler does dispatch per
-          user over Kafka, so only the unbounded fetch of the whole user list remains actionable.
-        
-        ### Validation Notes
-        *(General observations about data source availability, temporal context, or review quality.)*
-        ```
-        
-        ---
-        
-        ## 5. Footer
-        
-        ```markdown
-        ---
-        *Validation performed by independently re-querying Datadog MCP and Azure MCP, and re-reading the
-        pipeline's MySQL table data and the code repositories, against the claims in the original report.*
-        *Metric tolerances applied: ±20% for 28-day averages, ±30% for peaks (rolling window drift).*
-        *Config tolerances: exact match for static config; ±10 GB or ±10% for dynamic storage values.*
-        ```
-        
-        ---
-        
-        ## Drift-Prevention Checklist for Validators
-        
-        Before finalizing the validation report, confirm:
-        
-        - [ ] All 8 check sections are present in the correct order
-        - [ ] Validation Summary table has exactly 8 rows
-        - [ ] Check 8 reports one finding per recommendation, including the ones that passed
-        - [ ] Every finding includes: Reported value, Actual value with `[Source: ...]`, and Detail
-        - [ ] No finding is left without a STATUS tag
-        - [ ] Overall Verdict matches the highest-severity finding (FAIL > WARNING > PASS)
-        - [ ] Critical Issues section lists every FAIL; Warnings section lists every WARNING
-        - [ ] SKIPPED findings have a clear reason stated
-        - [ ] Temporal context is noted when report is >30 days old (affects Check 2 and Check 6)
+
+        ## Before you write
+
+        - [ ] Every check you own has a section, with the exact header above
+        - [ ] Every section header ends in a status, and that status matches its findings
+              (any FAIL → FAIL; else any WARNING → WARNING; else PASS or SKIPPED)
+        - [ ] Every finding has a STATUS tag, a Reported value, an Actual value with `[Source: ...]`,
+              and a Detail
+        - [ ] Every SKIPPED finding states why it was skipped
+        - [ ] A check you could not complete is reported as its findings actually stand — never as
+              PASS. A check that silently passes because it could not look is worse than no check.
+        - [ ] Temporal context is noted when the report is more than 30 days old
             """;
+
+        FILE_OUTPUT = """
+
+
+        ## Where to write it
+
+        Write those sections — and nothing else — to `{{OUTPUT_PATH}}` using the file system write
+        tool.
+
+        **Nothing else** means: no validation header, no summary table, no overall verdict, no
+        critical-issues or warnings list, no footer. The pipeline assembles all of those from the
+        sessions once they have all finished, and anything of that kind written here would be merged
+        into the report twice.
+            """;
+
+        RESPONSE_OUTPUT = """
+
+
+        ## What to return
+
+        Return those sections — and nothing else — as your response.
+
+        **Nothing else** means: no validation header, no summary table, no overall verdict, no
+        critical-issues or warnings list, no footer. The pipeline computes all of those from your
+        findings, and a copy of them here would be merged into the report twice.
+            """;
+    }
+
+    private ValidationFormatPrompt() {
     }
 }

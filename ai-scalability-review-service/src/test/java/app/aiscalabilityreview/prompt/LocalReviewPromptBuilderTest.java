@@ -140,34 +140,73 @@ class LocalReviewPromptBuilderTest {
             .doesNotContain("src/main/resources/doc/scalability-review-checkpoint.md");
     }
 
+    /**
+     * The static group is the only one that needs the scoring thresholds and the report format, and
+     * it must be able to decide its checks without a data source or a repository.
+     */
     @Test
-    void validationPromptCarriesTheThresholdsAndFormatsItChecksAgainst() {
-        String prompt = LocalReviewPromptBuilder.buildValidationPrompt(validationParams());
+    void staticValidationPromptCarriesTheThresholdsAndFormatItChecksAgainst() {
+        String prompt = LocalReviewPromptBuilder.buildStaticValidationPrompt(validationParams());
 
         assertThat(prompt).doesNotContain("{{")
             .doesNotContain("ai-scalability-review-service/src/main/java")
             .contains("## Metric Scoring Reference")
             .contains("## Report Format Reference")
-            .contains("## Validation Format Reference")
             .contains("@/out/2026-09-23-review.md")
-            .contains("/out/mysql-tables.md")
-            .contains("/out/2026-09-23-validation.md");
+            .contains("Check 3 — Cross-Source Metric Consistency")
+            .contains("Check 7 — Format & Attribution Completeness")
+            .contains("/out/validation-static.md");
     }
 
     /**
-     * Check 8 re-verifies each recommendation against the primary source, so the validation stage has
-     * to be pointed at the application repository as well as the infra one.
+     * Keeping the 27 KB of scoring thresholds and report format out of the group that makes the tool
+     * calls is most of what the split buys: in an agentic loop every byte of it would be re-sent on
+     * each round-trip.
      */
     @Test
-    void validationPromptChecksRecommendationSoundnessAgainstBothRepositories() {
+    void dataValidationPromptCarriesNeitherTheThresholdsNorTheReportFormat() {
+        String prompt = LocalReviewPromptBuilder.buildDataValidationPrompt(validationParams());
+
+        assertThat(prompt).doesNotContain("{{")
+            .doesNotContain("## Metric Scoring Reference")
+            .doesNotContain("## Report Format Reference")
+            .doesNotContain("Check 8 — Recommendation Soundness")
+            .contains("Check 1 — Config Accuracy")
+            .contains("Check 2 — Metric Numerical Fidelity")
+            .contains("Check 6 — NOT_COLLECTED Authenticity")
+            .contains("/out/mysql-tables.md")
+            .contains("/infra")
+            .contains("/out/validation-data.md");
+    }
+
+    /**
+     * Check 8 re-verifies each recommendation against the primary source, so its group is the one
+     * pointed at the application repository — and the only one, now that it no longer shares a
+     * context with the checks that just re-read the report.
+     */
+    @Test
+    void adviceValidationPromptChecksRecommendationSoundnessAgainstBothRepositories() {
+        String prompt = LocalReviewPromptBuilder.buildAdviceValidationPrompt(validationParams());
+
+        assertThat(prompt).doesNotContain("{{")
+            .doesNotContain("Check 1 — Config Accuracy")
+            .contains("Check 8 — Recommendation Soundness")
+            .contains("/app-repo")
+            .contains("/infra")
+            .contains("/out/validation-advice.md");
+    }
+
+    /** No group may write the summary table or the verdict; the pipeline computes both. */
+    @Test
+    void everyValidationGroupIsToldToWriteItsCheckSectionsAndNothingElse() {
         ValidationPromptParams params = validationParams();
 
-        assertThat(LocalReviewPromptBuilder.buildValidationPrompt(params))
-            .doesNotContain("{{")
-            .contains("Check 8 — Recommendation Soundness")
-            .contains("Execute all 8 checks")
-            .contains("/app-repo")
-            .contains("/infra");
+        assertThat(List.of(LocalReviewPromptBuilder.buildStaticValidationPrompt(params),
+            LocalReviewPromptBuilder.buildDataValidationPrompt(params),
+            LocalReviewPromptBuilder.buildAdviceValidationPrompt(params)))
+            .allSatisfy(prompt -> assertThat(prompt)
+                .contains("no summary table, no overall verdict")
+                .contains("## Check "));
     }
 
     /** A validation run triggered without the application repository must still resolve every placeholder. */
@@ -176,7 +215,7 @@ class LocalReviewPromptBuilderTest {
         ValidationPromptParams params = validationParams();
         params.localAppRepoPath = null;
 
-        assertThat(LocalReviewPromptBuilder.buildValidationPrompt(params))
+        assertThat(LocalReviewPromptBuilder.buildAdviceValidationPrompt(params))
             .doesNotContain("{{")
             .contains("not provided");
     }
@@ -224,7 +263,9 @@ class LocalReviewPromptBuilderTest {
         params.atlasCluster = null;
         params.kafkaConsumerGroups = "wonder-cart-service";
         params.mysqlTablesPath = "/out/mysql-tables.md";
-        params.outputPath = "/out/2026-09-23-validation.md";
+        params.staticOutputPath = "/out/validation-static.md";
+        params.dataOutputPath = "/out/validation-data.md";
+        params.adviceOutputPath = "/out/validation-advice.md";
         return params;
     }
 

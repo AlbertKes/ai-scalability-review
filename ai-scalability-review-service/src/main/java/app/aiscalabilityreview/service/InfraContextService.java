@@ -58,13 +58,6 @@ public class InfraContextService {
     /** {@code variable "env" { type = string  default = "FTIUat" }} — the Azure name of the environment. */
     private static final Pattern ENV_VARIABLE_DEFAULT =
         Pattern.compile("variable\\s+\"env\"\\s*\\{[^}]*?default\\s*=\\s*\"([^\"]+)\"", Pattern.DOTALL);
-    /**
-     * Values that mean "this service has none of that". {@code null} and {@code none} are here
-     * because a caller that stringifies an absent field sends the four characters {@code null},
-     * which then matches as a substring — that is how an entire Atlas tree once joined the context
-     * of a service with no MongoDB at all.
-     */
-    private static final Set<String> ABSENT_VALUES = Set.of("n/a", "null", "none", "-");
     private static final int MAX_FILE_CHARS = 64 * 1024;
     private static final int MAX_TOTAL_CHARS = 384 * 1024;
 
@@ -162,7 +155,7 @@ public class InfraContextService {
     }
 
     private boolean isPresent(String value) {
-        return !Strings.isBlank(value) && !ABSENT_VALUES.contains(value.trim().toLowerCase(Locale.US));
+        return RequestValues.isPresent(value);
     }
 
     /** The host as written, plus its {@code flexible-} suffix, which is what Terraform interpolates. */

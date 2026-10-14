@@ -17,7 +17,7 @@ interface Props {
 }
 
 /**
- * The run as its five stages (FR-3.1).
+ * The run as its stages (FR-3.1).
  *
  * Every stage is always shown, including the ones that have not started: a timeline that grows a
  * row at a time cannot tell the reader what is still to come.

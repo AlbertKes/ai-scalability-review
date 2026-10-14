@@ -9,6 +9,7 @@ import app.aiscalabilityreview.service.GeminiCliService.GeminiRunContext;
 import app.aiscalabilityreview.service.GeminiCliService.GeminiRunResult;
 import app.aiscalabilityreview.service.ReviewService;
 import core.framework.inject.Inject;
+import core.framework.util.Strings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,8 +25,8 @@ import java.util.concurrent.Future;
  * Bookkeeping around one stage: status transitions, timing, token and cost accounting, the artifacts
  * it left behind and the log file the console tails.
  *
- * <p>Separated from {@link LocalReviewJobExecutor} so the executor reads as the five stages it runs
- * rather than as the same twenty lines of instrumentation five times over.
+ * <p>Separated from {@link LocalReviewJobExecutor} so the executor reads as the stages it runs
+ * rather than as the same twenty lines of instrumentation once per stage.
  */
 public class LocalReviewStageRunner {
     private final Logger logger = LoggerFactory.getLogger(LocalReviewStageRunner.class);
@@ -108,6 +109,18 @@ public class LocalReviewStageRunner {
         } catch (ExecutionException e) {
             logger.info("A parallel stage also failed while the run was already failing: {}", e.getMessage());
         }
+    }
+
+    /**
+     * Skips a stage a retry is reusing instead of re-running.
+     *
+     * @return true when the stage was skipped, so the caller returns without starting it
+     */
+    public boolean skipIfReused(ReviewJob job, String stage) {
+        if (Strings.isBlank(job.retryFromStage)) return false;
+        if (LocalReviewStages.indexOf(stage) >= LocalReviewStages.indexOf(job.retryFromStage)) return false;
+        skip(job.jobId, stage, "reused from run " + job.retryOfJobId);
+        return true;
     }
 
     public void skip(String jobId, String stageName, String reason) {

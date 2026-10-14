@@ -9,7 +9,7 @@ import core.framework.api.validate.NotNull;
  * it. A null {@code from_stage} means re-run everything.
  */
 public class RetryLocalReviewRequest {
-    /** STAGE_1_CODE_ANALYSIS … STAGE_5_VALIDATION, or null to start from the beginning. */
+    /** STAGE_1_CODE_ANALYSIS … STAGE_5D_VALIDATION_REPORT, or null to start from the beginning. */
     @Property(name = "from_stage")
     public String fromStage;
 

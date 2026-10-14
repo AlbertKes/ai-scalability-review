@@ -144,6 +144,9 @@ public class MetricScorePrompt {
         | **Connection pool — peak as % of cluster connection limit** | < 40 % | 40 % – 70 % | > 70 % |
         | **Query targeting ratio (scanned / returned) — 28-day average** | < 10 | 10 – 100 | > 100 |
         | **Query targeting ratio — peak observed** | < 20 | 20 – 100 | > 100 |
+        | **Data size — absolute (GB)** | < 100 GB | 100 – 500 GB | > 500 GB |
+        | **Data size — 28-day growth** | < 10 % | 10 % – 50 % | > 50 % |
+        | **Index size as a share of data size** | < 50 % | 50 % – 100 % | > 100 % |
         
         ### Redis (if used)
         

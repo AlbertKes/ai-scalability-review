@@ -31,4 +31,7 @@ public class PreflightRequest {
 
     @QueryParam(name = "mysql_db")
     public String mysqlDB;
+
+    @QueryParam(name = "atlas_cluster")
+    public String atlasCluster;
 }

@@ -197,6 +197,7 @@ public class ReportFormatPrompt {
         - **MongoDB op latency**: read average `<value> ms`, write average `<value> ms`, read peak `<value> ms` [Source: ...]
         - **MongoDB connections**: peak `<value>` (`<value>%` of the cluster limit `<value>`) [Source: ...]
         - **MongoDB query targeting ratio**: average `<value>`, peak `<value>` [Source: ...]
+        - **MongoDB storage**: data `<value> GB`, indexes `<value> GB` (`<value>%` of data), `<value>` collections, `<value>` documents; 28-day data growth `<value>%` [Source: ...]
 
         ### 3.6 Kafka Consumer Lag
         Include this sub-section only when the service has Kafka consumer groups; omit it entirely

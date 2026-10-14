@@ -15,8 +15,13 @@ import app.aiscalabilityreview.domain.ServiceConfig;
 import app.aiscalabilityreview.domain.ValidationResult;
 import app.aiscalabilityreview.domain.embedded.AIModel;
 import app.aiscalabilityreview.prompt.ComparisonPrompt;
-import app.aiscalabilityreview.prompt.ValidateReportTaskPrompt;
+import app.aiscalabilityreview.prompt.RecommendationSoundnessPrompt;
+import app.aiscalabilityreview.prompt.ValidationChecks;
+import app.aiscalabilityreview.prompt.ValidationDataChecksPrompt;
 import app.aiscalabilityreview.prompt.ValidationFormatPrompt;
+import app.aiscalabilityreview.prompt.ValidationPreamblePrompt;
+import app.aiscalabilityreview.prompt.ValidationStaticChecksPrompt;
+import app.aiscalabilityreview.service.ValidationReportAssembler.AssemblyParams;
 import app.aiscalabilityreview.service.builder.ReviewReportBuilder;
 import core.framework.api.json.Property;
 import core.framework.async.Executor;
@@ -29,6 +34,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.UUID;
 
@@ -38,9 +44,12 @@ public class ReviewReportService {
     private static final int VALIDATE_MAX_TOKENS = 8192;
     private static final double VALIDATE_TEMPERATURE = 0.1;
     private static final AIModel DEFAULT_MODEL = AIModel.CLAUDE_OPUS_5;
+    private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private final Logger logger = LoggerFactory.getLogger(ReviewReportService.class);
     @Inject
     Executor executor;
+    @Inject
+    ValidationReportAssembler assembler;
     @Inject
     ReviewService reviewService;
     @Inject
@@ -169,29 +178,20 @@ public class ReviewReportService {
         reviewService.updateValidationResult(result);
 
         try {
-            String systemPrompt = ValidateReportTaskPrompt.CONTENT
-                .replace("{{REPORT_FILE}}", "report-" + report.reportId)
-                .replace("{{SERVICE}}", report.serviceId)
-                .replace("{{ENV}}", "prod")
-                .replace("{{NAMESPACE}}", report.serviceId)
-                .replace("{{MYSQL_HOST}}", "N/A")
-                .replace("{{MYSQL_DB}}", "N/A")
-                .replace("{{ATLAS_CLUSTER}}", "N/A")
-                .replace("{{KAFKA_CONSUMER_GROUPS}}", "N/A");
-
-            String userPrompt = "Here is the report to validate:\n\n" + report.reportMarkdown
-                + "\n\nFollow the validation format:\n\n" + ValidationFormatPrompt.CONTENT;
-
             AnthropicService.GeneratedContent aiResult = anthropicService.generate(
-                model, systemPrompt, userPrompt, VALIDATE_MAX_TOKENS, VALIDATE_TEMPERATURE);
+                model, validationSystemPrompt(report), validationUserPrompt(report),
+                VALIDATE_MAX_TOKENS, VALIDATE_TEMPERATURE);
 
-            result.validationReportMarkdown = aiResult.text();
+            String markdown = assembler.merge(new AssemblyParams(report.serviceId, "prod", "report-" + report.reportId,
+                DATE_FORMAT.format(ZonedDateTime.now()), String.valueOf(model), null), List.of(aiResult.text()));
+            result.validationReportMarkdown = markdown;
             result.inputTokens = aiResult.inputTokens();
             result.outputTokens = aiResult.outputTokens();
             result.estimatedCostUsd = aiResult.estimatedCostUsd();
             result.status = "COMPLETED";
             result.generatedAt = ZonedDateTime.now();
-            result.verdict = parseVerdict(aiResult.text());
+            result.checkResults = ValidationReportParser.checks(markdown);
+            result.verdict = parseVerdict(markdown);
 
             // Optionally publish to Confluence
             if (uploadToConfluence) {
@@ -221,6 +221,41 @@ public class ReviewReportService {
         } catch (Exception e) {
             logger.warn("Failed to publish validation to Confluence: {}", e.getMessage());
         }
+    }
+
+    /**
+     * This pipeline validates in one call with no tools, so it carries all eight check groups at
+     * once — the context/round-trip product that forced the local pipeline to split them does not
+     * arise here. It writes the same per-check sections, and the header, summary table and verdict
+     * are computed by {@link ValidationReportAssembler} exactly as they are for a local run.
+     */
+    private String validationSystemPrompt(ReviewReport report) {
+        String prompt = ValidationPreamblePrompt.CONTENT
+            .replace("{{CHECK_SCOPE}}", "This session owns **all eight checks**.")
+            + ValidationDataChecksPrompt.CONTENT
+            + ValidationStaticChecksPrompt.CONTENT
+            + RecommendationSoundnessPrompt.CONTENT
+            + ValidationFormatPrompt.CONTENT.replace("{{CHECK_HEADERS}}",
+                ValidationChecks.headers(ValidationChecks.ALL.stream().map(ValidationChecks.Check::number).toList()))
+            + ValidationFormatPrompt.RESPONSE_OUTPUT;
+        return prompt
+            .replace("{{REPORT_FILE}}", "report-" + report.reportId)
+            .replace("{{SERVICE}}", report.serviceId)
+            .replace("{{ENV}}", "prod")
+            .replace("{{NAMESPACE}}", report.serviceId)
+            .replace("{{MYSQL_HOST}}", "N/A")
+            .replace("{{MYSQL_DB}}", "N/A")
+            .replace("{{ATLAS_CLUSTER}}", "N/A")
+            .replace("{{KAFKA_CONSUMER_GROUPS}}", "N/A")
+            .replace("{{MYSQL_TABLES_PATH}}", "N/A")
+            .replace("{{INFRA_REPO_PATH}}", "not available in this pipeline")
+            .replace("{{APP_REPO_PATH}}", "not available in this pipeline")
+            .replace("{{APP_SOURCE_ROOTS}}", "not available in this pipeline")
+            .replace("{{INFRA_CONTEXT_PATH}}", "N/A");
+    }
+
+    private String validationUserPrompt(ReviewReport report) {
+        return "Here is the report to validate:\n\n" + report.reportMarkdown;
     }
 
     private String parseVerdict(String markdown) {

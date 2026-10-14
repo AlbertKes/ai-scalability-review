@@ -34,12 +34,17 @@ import static com.mongodb.client.model.Indexes.descending;
 @Flyway(collection = "review_jobs")
 public class ReviewJobScript {
     /**
-     * {@code has_failed_stage} ORs over these five paths, and every branch of an {@code $or} has to
-     * be indexed or the whole query plans as a collection scan.
+     * {@code has_failed_stage} ORs over these paths, and every branch of an {@code $or} has to be
+     * indexed or the whole query plans as a collection scan.
+     *
+     * <p>{@code STAGE_5_VALIDATION} is kept alongside the four stages that replaced it: jobs
+     * recorded before validation was split still carry it, and dropping it here would make those
+     * documents invisible to the failed-stage filter.
      */
     private static final List<String> STAGES = List.of(
         "STAGE_1_CODE_ANALYSIS", "STAGE_2_INFRA_CONTEXT", "STAGE_3_METRIC_COLLECTION",
-        "STAGE_4_SYNTHESIS", "STAGE_5_VALIDATION");
+        "STAGE_4_SYNTHESIS", "STAGE_5_VALIDATION", "STAGE_5A_VALIDATION_STATIC",
+        "STAGE_5B_VALIDATION_DATA", "STAGE_5C_VALIDATION_ADVICE", "STAGE_5D_VALIDATION_REPORT");
 
     /** Superseded by {@code {status:1, started_at:-1}}, which serves everything it did. */
     private static final String OBSOLETE_STATUS_INDEX = "status_1";

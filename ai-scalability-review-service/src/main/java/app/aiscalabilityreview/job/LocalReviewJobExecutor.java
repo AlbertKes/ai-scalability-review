@@ -9,7 +9,6 @@ import app.aiscalabilityreview.job.LocalReviewStageRunner.StageInput;
 import app.aiscalabilityreview.prompt.LocalReviewPromptBuilder;
 import app.aiscalabilityreview.prompt.LocalReviewPromptBuilder.MetricCollectionParams;
 import app.aiscalabilityreview.prompt.LocalReviewPromptBuilder.ReviewPromptParams;
-import app.aiscalabilityreview.prompt.LocalReviewPromptBuilder.ValidationPromptParams;
 import app.aiscalabilityreview.service.AppSettingsService;
 import app.aiscalabilityreview.service.GeminiCliService;
 import app.aiscalabilityreview.service.GeminiCliService.GeminiRunRequest;
@@ -55,7 +54,7 @@ import java.util.concurrent.Future;
  */
 public class LocalReviewJobExecutor {
     /** Bumped whenever the prompt templates change, so two runs can be told apart (FR-6.7). */
-    public static final String PROMPT_VERSION = "AD-6385";
+    public static final String PROMPT_VERSION = "AD-6385-validation-split";
 
     private static final String DATADOG_MCP = "datadog";
     private static final String AZURE_MCP = "azure";
@@ -71,7 +70,6 @@ public class LocalReviewJobExecutor {
     private static final int CODE_ANALYSIS_TIMEOUT_MINUTES = 15;
     private static final int METRIC_COLLECTION_TIMEOUT_MINUTES = 20;
     private static final int SYNTHESIS_TIMEOUT_MINUTES = 15;
-    private static final int VALIDATION_TIMEOUT_MINUTES = 20;
 
     private final Logger logger = LoggerFactory.getLogger(LocalReviewJobExecutor.class);
 
@@ -85,6 +83,8 @@ public class LocalReviewJobExecutor {
     MySQLTableStorageService mysqlTableStorageService;
     @Inject
     LocalReviewStageRunner stageRunner;
+    @Inject
+    LocalReviewValidationRunner validationRunner;
     @Inject
     LocalReviewRunFinalizer finalizer;
     @Inject
@@ -186,21 +186,13 @@ public class LocalReviewJobExecutor {
         stageRunner.awaitStage(LocalReviewStages.CODE_ANALYSIS, codeAnalysis);
 
         runSynthesisStage(job, request, paths, stats, handle);
-        runValidationStage(job, request, paths, stats, handle);
-    }
-
-    /** A retry starting later than this stage reuses its output instead of rebuilding it. */
-    private boolean skipIfReused(ReviewJob job, String stage) {
-        if (Strings.isBlank(job.retryFromStage)) return false;
-        if (LocalReviewStages.indexOf(stage) >= LocalReviewStages.indexOf(job.retryFromStage)) return false;
-        stageRunner.skip(job.jobId, stage, "reused from run " + job.retryOfJobId);
-        return true;
+        validationRunner.run(job, request, paths, stats, handle);
     }
 
     private void runCodeAnalysisStage(ReviewJob job, GenerateLocalReviewRequest request,
                                       LocalReviewArtifactPaths paths, LocalReviewRunStats stats, RunHandle handle) {
         String stage = LocalReviewStages.CODE_ANALYSIS;
-        if (skipIfReused(job, stage)) return;
+        if (stageRunner.skipIfReused(job, stage)) return;
         if (Boolean.TRUE.equals(request.skipCodeAnalysis)) {
             preparer.ensureCodeContextExists(request, job.serviceId, paths);
             stageRunner.skip(job.jobId, stage, "skipped by request");
@@ -220,7 +212,7 @@ public class LocalReviewJobExecutor {
     private void runInfraContextStage(ReviewJob job, GenerateLocalReviewRequest request,
                                       LocalReviewArtifactPaths paths, LocalReviewRunStats stats, RunHandle handle) {
         String stage = LocalReviewStages.INFRA_CONTEXT;
-        if (skipIfReused(job, stage)) return;
+        if (stageRunner.skipIfReused(job, stage)) return;
         StageInput input = new StageInput(job.jobId, stage, true, stats, paths.runDir(), handle,
             List.of(LocalReviewOutputPaths.INFRA_CONTEXT, LocalReviewOutputPaths.MYSQL_TABLES));
         stageRunner.runLocal(input, () -> {
@@ -235,7 +227,7 @@ public class LocalReviewJobExecutor {
     private void runMetricCollectionStage(ReviewJob job, GenerateLocalReviewRequest request,
                                           LocalReviewArtifactPaths paths, LocalReviewRunStats stats, RunHandle handle) {
         String stage = LocalReviewStages.METRIC_COLLECTION;
-        if (skipIfReused(job, stage)) return;
+        if (stageRunner.skipIfReused(job, stage)) return;
         String model = GeminiModels.orDefault(request.metricCollectionModel, GeminiModels.METRIC_COLLECTION_DEFAULT);
         StageInput input = new StageInput(job.jobId, stage, true, stats, paths.runDir(), handle,
             List.of(LocalReviewOutputPaths.METRICS));
@@ -261,7 +253,7 @@ public class LocalReviewJobExecutor {
     private void runSynthesisStage(ReviewJob job, GenerateLocalReviewRequest request,
                                    LocalReviewArtifactPaths paths, LocalReviewRunStats stats, RunHandle handle) {
         String stage = LocalReviewStages.SYNTHESIS;
-        if (skipIfReused(job, stage)) return;
+        if (stageRunner.skipIfReused(job, stage)) return;
         String model = GeminiModels.orDefault(request.synthesisModel, GeminiModels.SYNTHESIS_DEFAULT);
         StageInput input = new StageInput(job.jobId, stage, true, stats, paths.runDir(), handle,
             List.of(fileName(paths.reviewReport()), LocalReviewOutputPaths.REPORT_SNAPSHOT));
@@ -283,39 +275,6 @@ public class LocalReviewJobExecutor {
             return geminiCliService.run(new GeminiRunRequest(
                 LocalReviewPromptBuilder.buildReviewPrompt(params), model,
                 List.of(paths.runDir()), NO_MCP, SYNTHESIS_TIMEOUT_MINUTES), context);
-        });
-    }
-
-    private void runValidationStage(ReviewJob job, GenerateLocalReviewRequest request,
-                                    LocalReviewArtifactPaths paths, LocalReviewRunStats stats, RunHandle handle) {
-        String stage = LocalReviewStages.VALIDATION;
-        if (Boolean.TRUE.equals(request.skipValidation)) {
-            stageRunner.skip(job.jobId, stage, "skipped by request");
-            return;
-        }
-        String model = GeminiModels.orDefault(request.validationModel, GeminiModels.VALIDATION_DEFAULT);
-        StageInput input = new StageInput(job.jobId, stage, false, stats, paths.runDir(), handle,
-            List.of(fileName(paths.validationReport())));
-        stageRunner.runGemini(input, context -> {
-            ValidationPromptParams params = new ValidationPromptParams();
-            params.serviceId = request.service;
-            params.reviewReportPath = paths.reviewReport();
-            params.infraContextPath = paths.infraContext();
-            params.localInfraRepoPath = request.localInfraRepoPath;
-            params.localAppRepoPath = request.localAppRepoPath;
-            params.env = request.env;
-            params.namespace = request.namespace;
-            params.mysqlHost = request.mysqlHost;
-            params.mysqlDb = request.mysqlDB;
-            params.atlasCluster = request.atlasCluster;
-            params.kafkaConsumerGroups = request.kafkaConsumerGroups;
-            params.mysqlTablesPath = paths.mysqlTables();
-            params.appCodePaths = request.appCodePaths;
-            params.outputPath = paths.validationReport();
-            return geminiCliService.run(new GeminiRunRequest(
-                LocalReviewPromptBuilder.buildValidationPrompt(params), model,
-                List.of(paths.runDir(), request.localInfraRepoPath, request.localAppRepoPath),
-                DATA_MCP, VALIDATION_TIMEOUT_MINUTES), context);
         });
     }
 

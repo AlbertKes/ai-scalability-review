@@ -107,44 +107,9 @@ public class LocalReviewPromptBuilder {
         the average as a percentage of max_connections.
         """;
 
-    private static final String VALIDATION_FILE_REFS = """
-
-
-        ## Attached Local Files
-
-        **Review report to validate**:
-        @{{REPORT_FILE}}
-
-        **Infra repository root** (for re-reading source-annotated config files):
-        Local path: `{{INFRA_REPO_PATH}}`
-
-        When the report cites `[Source: code -> <path>]`, read that file from this root with the read
-        tool. `{{INFRA_CONTEXT_PATH}}` lists which files the review stage was given and which were
-        skipped, so start there when you need to locate a cited file. Read only the files you
-        actually need in order to verify a claim.
-
-        **Application repository root** (for re-verifying claims about the service's own code):
-        Local path: `{{APP_REPO_PATH}}`
-
-        Check 8 needs this one. A claim annotated `[Source: context -> code-context.md]` was written
-        by an earlier model stage and is not evidence of itself, so re-read the class, migration SQL,
-        module registration or property file under this root before accepting or rejecting it. Search
-        for the symbol the report names rather than browsing — the repository is large, and a whole
-        directory read would cost more than the check is worth.
-        """;
-
-    private static final String VALIDATION_OUTPUT_CONTRACT = """
-
-
-        Now produce the complete validation report.
-
-        Write the complete validation report to file `{{OUTPUT_PATH}}` using the file system write
-        tool.
-        """;
-
+    private static final String VALIDATION_OUTPUT_HEADING = "\n\n---\n\n";
     private static final String SCORING_REFERENCE_HEADING = "\n\n## Metric Scoring Reference\n\n";
     private static final String FORMAT_REFERENCE_HEADING = "\n\n## Report Format Reference\n\n";
-    private static final String VALIDATION_REFERENCE_HEADING = "\n\n## Validation Format Reference\n\n";
 
     // --- Output path factory methods ---
 
@@ -178,6 +143,18 @@ public class LocalReviewPromptBuilder {
 
     public static String validationReportPath(String outputDir, String date) {
         return outputDir + "/" + date + "-validation.md";
+    }
+
+    public static String validationStaticPath(String outputDir) {
+        return outputDir + "/validation-static.md";
+    }
+
+    public static String validationDataPath(String outputDir) {
+        return outputDir + "/validation-data.md";
+    }
+
+    public static String validationAdvicePath(String outputDir) {
+        return outputDir + "/validation-advice.md";
     }
 
     /**
@@ -250,14 +227,58 @@ public class LocalReviewPromptBuilder {
             .replace("{{OUTPUT_PATH}}", p.outputPath);
     }
 
-    /** Stage 5 — independent validation of the generated report. */
-    public static String buildValidationPrompt(ValidationPromptParams p) {
-        String prompt = ValidateReportTaskPrompt.CONTENT
-            + VALIDATION_FILE_REFS
+    /**
+     * Stage 5A — the checks that are answerable from the report alone (3, 4, 5, 7). It is the only
+     * group that needs the scoring thresholds and the report format spec, and now the only one that
+     * carries them.
+     */
+    public static String buildStaticValidationPrompt(ValidationPromptParams p) {
+        String prompt = preamble(ValidationPreamblePrompt.SCOPE_STATIC)
+            + ValidationStaticChecksPrompt.CONTENT
+            + ValidationStaticChecksPrompt.FILE_REFS
             + SCORING_REFERENCE_HEADING + MetricScorePrompt.CONTENT
             + FORMAT_REFERENCE_HEADING + ReportFormatPrompt.CONTENT
-            + VALIDATION_REFERENCE_HEADING + ValidationFormatPrompt.CONTENT
-            + VALIDATION_OUTPUT_CONTRACT;
+            + outputContract(ValidationChecks.STATIC_GROUP);
+        return resolveValidation(prompt, p, p.staticOutputPath);
+    }
+
+    /**
+     * Stage 5B — the checks that re-query the live sources (1, 2, 6). It is given neither the
+     * scoring thresholds nor the report format spec: 27 KB that only checks 4 and 7 read, and in an
+     * agentic loop every byte of it was re-sent on each of this group's tool round-trips.
+     */
+    public static String buildDataValidationPrompt(ValidationPromptParams p) {
+        String prompt = preamble(ValidationPreamblePrompt.SCOPE_DATA)
+            + ValidationDataChecksPrompt.CONTENT
+            + ValidationDataChecksPrompt.FILE_REFS
+            + outputContract(ValidationChecks.DATA_GROUP);
+        return resolveValidation(prompt, p, p.dataOutputPath);
+    }
+
+    /**
+     * Stage 5C — the one check that re-reads the application source (8). Its file reads are what
+     * made the single-session validation expensive, so nothing else now shares a context with them.
+     */
+    public static String buildAdviceValidationPrompt(ValidationPromptParams p) {
+        String prompt = preamble(ValidationPreamblePrompt.SCOPE_ADVICE)
+            + RecommendationSoundnessPrompt.CONTENT
+            + RecommendationSoundnessPrompt.FILE_REFS
+            + outputContract(ValidationChecks.ADVICE_GROUP);
+        return resolveValidation(prompt, p, p.adviceOutputPath);
+    }
+
+    private static String preamble(String scope) {
+        return ValidationPreamblePrompt.CONTENT.replace("{{CHECK_SCOPE}}", scope);
+    }
+
+    private static String outputContract(List<Integer> group) {
+        return VALIDATION_OUTPUT_HEADING
+            + ValidationFormatPrompt.CONTENT.replace("{{CHECK_HEADERS}}", ValidationChecks.headers(group))
+            + ValidationFormatPrompt.FILE_OUTPUT;
+    }
+
+    /** The placeholders every validation group shares, resolved once over the assembled prompt. */
+    private static String resolveValidation(String prompt, ValidationPromptParams p, String outputPath) {
         return prompt
             .replace("{{REPORT_FILE}}", p.reviewReportPath)
             .replace("{{SERVICE}}", p.serviceId)
@@ -272,7 +293,7 @@ public class LocalReviewPromptBuilder {
             .replace("{{APP_SOURCE_ROOTS}}", appSourceRoots(p.localAppRepoPath, p.appCodePaths))
             .replace("{{INFRA_CONTEXT_PATH}}", p.infraContextPath)
             .replace("{{MYSQL_TABLES_PATH}}", p.mysqlTablesPath)
-            .replace("{{OUTPUT_PATH}}", p.outputPath);
+            .replace("{{OUTPUT_PATH}}", outputPath);
     }
 
     /**
@@ -358,6 +379,9 @@ public class LocalReviewPromptBuilder {
         public String atlasCluster;
         public String kafkaConsumerGroups;
         public String mysqlTablesPath;
-        public String outputPath;
+        /** Where each group writes its partial; the pipeline merges the three into one report. */
+        public String staticOutputPath;
+        public String dataOutputPath;
+        public String adviceOutputPath;
     }
 }

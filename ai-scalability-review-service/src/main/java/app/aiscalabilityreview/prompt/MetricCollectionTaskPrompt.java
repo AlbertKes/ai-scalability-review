@@ -193,7 +193,20 @@ public class MetricCollectionTaskPrompt {
         - `avg:mongodb.atlas.oplatencies.writes.avg{clustername:{{ATLAS_CLUSTER}}}.rollup(avg, 86400)`
         - `max:mongodb.atlas.oplatencies.reads.avg{clustername:{{ATLAS_CLUSTER}}}.rollup(max, 86400)`
         - `max:mongodb.atlas.connections.current{clustername:{{ATLAS_CLUSTER}}}.rollup(max, 86400)`
-        - `sum:mongodb.atlas.metrics.queryexecutor.scannedperreturned{clustername:{{ATLAS_CLUSTER}}}.rollup(sum, 86400)`
+        - `avg:mongodb.atlas.metrics.queryexecutor.scannedperreturned{clustername:{{ATLAS_CLUSTER}}}.rollup(avg, 86400)`
+        - `avg:mongodb.atlas.metrics.queryexecutor.scannedperreturned{clustername:{{ATLAS_CLUSTER}}}.rollup(max, 86400)`
+        - `avg:mongodb.atlas.dbstats.data.size{clustername:{{ATLAS_CLUSTER}}}.rollup(max, 86400)`
+        - `avg:mongodb.atlas.dbstats.index.size{clustername:{{ATLAS_CLUSTER}}}.rollup(max, 86400)`
+        - `avg:mongodb.atlas.dbstats.collections{clustername:{{ATLAS_CLUSTER}}}.rollup(max, 86400)`
+        - `avg:mongodb.atlas.dbstats.objects{clustername:{{ATLAS_CLUSTER}}}.rollup(max, 86400)`
+
+        The Atlas aggregators above are not interchangeable, so copy them as written.
+        `connections.current` takes `max:` because the busiest member is the one that runs out of
+        connections. Everything else takes `avg:`, because every member of the replica set reports
+        the same database — measured on a four-member cluster, `avg:` gives the true 8.0 GB,
+        `max:` gives 80 GB and `sum:` gives 642 GB. And the targeting ratio is a **ratio**: summing
+        it over a day multiplies it by the number of samples, which turned a real 1.5–62 into
+        50,000–2,000,000 and scored every MongoDB service RED on a threshold of 100.
 
         Record, each with the date of its peak bucket:
         - Active connections: 28-day average and peak.
@@ -208,7 +221,20 @@ public class MetricCollectionTaskPrompt {
           the raw unit is not what was assumed: write
           `NOT_COLLECTED: storage_used unit unexpected — raw value <value>` and move on rather than
           publishing a number that cannot be true.
-        - MongoDB read/write latencies, connections and scanned-per-returned, where applicable.
+        - MongoDB operation latency: read average and peak, write average, in milliseconds.
+        - MongoDB connections: peak, and the percentage of the cluster's connection limit it
+          represents when that limit is known.
+        - MongoDB query targeting ratio (documents scanned per document returned): the 28-day
+          average from the `rollup(avg, ...)` series and the worst day from the `rollup(max, ...)`
+          one. Report both; a healthy average hides the day a collection scan ran.
+        - MongoDB storage: data size and index size in GB, the collection count, and the document
+          count. The `data.size` and `index.size` points are **bytes**: divide by 1024³ once, and
+          only once. Sanity-check the result — a cluster holding tens of millions of documents is
+          not 8 bytes and not 8 petabytes. If the converted figure is implausible, write
+          `NOT_COLLECTED: dbstats unit unexpected — raw value <value>` rather than publishing it.
+          Also report the 28-day growth of data size and document count: last minus first, as a
+          percentage. That trend, not the absolute size, is what says whether the cluster tier
+          holds for another quarter.
 
         ## Group 6 — Datadog: monitors
 
@@ -372,7 +398,16 @@ public class MetricCollectionTaskPrompt {
           "mysql_replication_lag_avg_s": null,
           "mysql_storage_used_gb": null,
           "mongo_read_latency_ms": null,
+          "mongo_read_latency_peak_ms": null,
           "mongo_write_latency_ms": null,
+          "mongo_connections_peak": null,
+          "mongo_targeting_ratio_avg": null,
+          "mongo_targeting_ratio_peak": null,
+          "mongo_data_size_gb": null,
+          "mongo_index_size_gb": null,
+          "mongo_collections": null,
+          "mongo_documents": null,
+          "mongo_data_growth_pct": null,
           "largest_table_gb": null
         }
         ```

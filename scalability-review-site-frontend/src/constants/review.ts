@@ -1,19 +1,35 @@
 import type {RunStatus, Score, StageStatus} from "type/api";
 
-/** The five pipeline stages, in the order the backend runs them. */
+/** The pipeline stages, in the order the backend runs them. */
 export const STAGES = [
   "STAGE_1_CODE_ANALYSIS",
   "STAGE_2_INFRA_CONTEXT",
   "STAGE_3_METRIC_COLLECTION",
   "STAGE_4_SYNTHESIS",
-  "STAGE_5_VALIDATION",
+  "STAGE_5A_VALIDATION_STATIC",
+  "STAGE_5B_VALIDATION_DATA",
+  "STAGE_5C_VALIDATION_ADVICE",
+  "STAGE_5D_VALIDATION_REPORT",
 ] as const;
+
+/** The three validation sessions, which the backend runs side by side rather than in sequence. */
+export const VALIDATION_STAGES = [
+  "STAGE_5A_VALIDATION_STATIC",
+  "STAGE_5B_VALIDATION_DATA",
+  "STAGE_5C_VALIDATION_ADVICE",
+  "STAGE_5D_VALIDATION_REPORT",
+];
 
 export const STAGE_LABELS: Record<string, string> = {
   STAGE_1_CODE_ANALYSIS: "Code analysis",
   STAGE_2_INFRA_CONTEXT: "Infra context",
   STAGE_3_METRIC_COLLECTION: "Metric collection",
   STAGE_4_SYNTHESIS: "Synthesis & scoring",
+  STAGE_5A_VALIDATION_STATIC: "Validation: report self-check",
+  STAGE_5B_VALIDATION_DATA: "Validation: data re-check",
+  STAGE_5C_VALIDATION_ADVICE: "Validation: recommendation soundness",
+  STAGE_5D_VALIDATION_REPORT: "Validation: report assembly",
+  // runs before validation was split across three sessions; still on older jobs
   STAGE_5_VALIDATION: "Validation",
 };
 
@@ -25,6 +41,14 @@ export const STAGE_DESCRIPTIONS: Record<string, string> = {
   STAGE_3_METRIC_COLLECTION:
     "The only stage with MCP servers (Datadog, Azure). Small context, many tool calls, cheapest model.",
   STAGE_4_SYNTHESIS: "Large context, zero tool calls. Writes the report and the score snapshot.",
+  STAGE_5A_VALIDATION_STATIC:
+    "Checks 3, 4, 5, 7 — decided from the report alone. No MCP server, no repository, no tool calls.",
+  STAGE_5B_VALIDATION_DATA:
+    "Checks 1, 2, 6 — re-queries Datadog and Azure and re-reads the infra repository. Runs beside 5A and 5C.",
+  STAGE_5C_VALIDATION_ADVICE:
+    "Check 8 — re-reads the application source to re-verify each recommendation. Runs beside 5A and 5B.",
+  STAGE_5D_VALIDATION_REPORT:
+    "Merges the three partials into one report. Runs inside the service; the summary table and verdict are computed from the findings.",
   STAGE_5_VALIDATION:
     "Independent re-check of the report's data and its advice. Not fatal — a failure still leaves a usable report.",
 };

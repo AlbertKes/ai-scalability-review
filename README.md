@@ -53,33 +53,62 @@ Optional fields:
 | `azure_resource_group` | read from the infra repository | Azure resource group holding this environment's resources |
 | `azure_subscription_id` | Azure CLI profile default | subscription the Azure MCP calls run against |
 | `skip_code_analysis` | `false` | reuse the `code-context.md` of the newest previous run of this service |
-| `skip_validation` | `false` | skip stage 5; roughly halves the MCP round-trips of a run |
+| `skip_validation` | `false` | skip stages 5A-5D; that is where most of a run's MCP round-trips are |
 | `output_base_dir` | `reports` | where the run writes its files |
-| `code_analysis_model`, `metric_collection_model`, `synthesis_model`, `validation_model` | see below | pin one stage to a different Gemini model |
+| `code_analysis_model`, `metric_collection_model`, `synthesis_model`, `validation_model` | see below | pin one stage to a different Gemini model; `validation_model` drives 5A, 5B and 5C together |
 
 ### Pipeline
 
-| # | Stage | Model | MCP servers | Output |
-| :--- | :--- | :--- | :--- | :--- |
-| 1 | code analysis | `gemini-3.5-flash` | none | `code-context.md` |
-| 2 | infra context + MySQL table storage | none — runs in this service | none | `infra-context.md`, `mysql-tables.md` |
-| 3 | metric collection | `gemini-3.1-flash-lite` | datadog, azure | `metrics.md` |
-| 4 | synthesis & scoring | `gemini-3.5-flash` | none | `<date>-review.md`, `report-snapshot.json` |
-| 5 | validation | `gemini-3.5-flash` | datadog, azure | `<date>-validation.md` |
+| # | Stage | Model | MCP servers | Repositories | Output |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 1 | code analysis | `gemini-3.5-flash` | none | app | `code-context.md` |
+| 2 | infra context + MySQL table storage | none — runs in this service | none | infra | `infra-context.md`, `mysql-tables.md` |
+| 3 | metric collection | `gemini-3.1-flash-lite` | datadog, azure | none | `metrics.md` |
+| 4 | synthesis & scoring | `gemini-3.5-flash` | none | none | `<date>-review.md`, `report-snapshot.json` |
+| 5A | validation — report self-check | `gemini-3.5-flash` | none | none | `validation-static.md` |
+| 5B | validation — data re-check | `gemini-3.5-flash` | datadog, azure | infra | `validation-data.md` |
+| 5C | validation — recommendation soundness | `gemini-3.5-flash` | none | app, infra | `validation-advice.md` |
+| 5D | validation — report assembly | none — runs in this service | none | none | `<date>-validation.md` |
 
-Stages 1, 2, 3 and 4 are fatal; validation is not, so a validation failure still leaves a usable
-report. Validation runs 8 checks. Seven of them re-verify the report's *data* — config, metric
-fidelity, cross-source consistency, scoring, projection math, `NOT_COLLECTED` authenticity, format.
-The eighth re-verifies its *advice*: each recommendation is re-checked against the primary source in
-the application and infra repositories, and fails if its premise is contradicted there, rests on a
-`NOT_COLLECTED` metric, prescribes a number traceable to nothing, points the wrong way, or asks for
-something the code already does. That is why stage 5 is given the application repository as well as
-the infra one — `code-context.md` is an earlier stage's output and cannot verify itself. Every run also writes `run-stats.md` with the per-stage token and latency breakdown.
+Stages 1, 2, 3 and 4 are fatal; none of the validation stages is, so a validation failure still
+leaves a usable report. Every run also writes `run-stats.md` with the per-stage token and latency
+breakdown.
 
 The split exists because the review runs as an agentic loop, where the whole context is re-sent on
 every tool round-trip — so a stage that holds a large context *and* makes many tool calls pays the
 product of the two. Stage 3 keeps a small context and does the tool work; stage 4 holds the large
 context and makes no tool calls.
+
+### Validation is split the same way, and for the same reason
+
+Validation runs 8 checks, and they have very different appetites:
+
+- **5A — checks 3, 4, 5, 7** re-check the report against itself: cross-source consistency, scoring
+  against the thresholds, capacity projection arithmetic, format and source attribution. Answerable
+  from the report alone, so this stage starts no MCP server and is given no repository. It is also
+  the only one that needs the scoring thresholds and the report format spec — 27 KB of reference
+  material the other two no longer carry.
+- **5B — checks 1, 2, 6** re-query Datadog and Azure and re-read the infra manifests the report
+  cites, to confirm the config, the metric values, and that every `NOT_COLLECTED` was genuine.
+- **5C — check 8** re-verifies the report's *advice*. Each recommendation is re-checked against the
+  primary source in the application repository, and fails if its premise is contradicted there,
+  rests on a `NOT_COLLECTED` metric, prescribes a number traceable to nothing, points the wrong way,
+  or asks for something the code already does. It gets the application repository because
+  `code-context.md` is an earlier stage's output and cannot verify itself.
+
+5A, 5B and 5C are independent, so they run **side by side**; the group's wall clock is the slowest
+of the three rather than their sum. Holding them in one session was expensive in a way the stage
+table does not show: every source file check 8 opened stayed in the context and was re-sent on each
+later round-trip, including the ones that were only re-counting table rows. Measured on
+wonder-cart-service the single validation stage spent 6.0M input tokens over 61 tool calls in 547 s
+— 64 % of the run's tokens and 51 % of its wall clock.
+
+5D merges the three partials into `<date>-validation.md`. The summary table, the issue counts and
+the overall verdict are **computed there from the findings** rather than written by a model
+alongside them — no session can see all eight checks any more, and a verdict derived from the
+findings cannot disagree with them. A group whose stage failed leaves no partial; its checks are
+reported as not run and the verdict is held below a clean PASS, because a check that did not happen
+must never read as one that passed.
 
 Stage 3's Datadog queries are all `.rollup(<aggregator>, 86400)` (or `3600` for peak RPS) over a
 day-aligned 28-day window. That is what makes the per-day and per-week figures derivable at all, and

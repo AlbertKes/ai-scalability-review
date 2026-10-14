@@ -85,6 +85,7 @@ export interface PreflightRequest {
   output_base_dir?: string | null;
   mysql_host?: string | null;
   mysql_db?: string | null;
+  atlas_cluster?: string | null;
 }
 
 export type PreflightStatus = "PASS" | "WARN" | "FAIL";

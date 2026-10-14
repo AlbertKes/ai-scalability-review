@@ -18,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Pattern;
 
 /**
@@ -39,6 +40,9 @@ public class PreflightService {
     private static final String CATEGORY_REPO = "REPO";
     private static final String CATEGORY_DATA = "DATA";
 
+    /** Enough names to recognise the right one, few enough to read in a hint. */
+    private static final int MAX_SUGGESTIONS = 12;
+
     private static final Path GEMINI_SETTINGS = Path.of(System.getProperty("user.home"), ".gemini", "settings.json");
     private static final Path ADC_FILE = Path.of(System.getProperty("user.home"),
         ".config", "gcloud", "application_default_credentials.json");
@@ -53,6 +57,8 @@ public class PreflightService {
     AppSettingsService appSettingsService;
     @Inject
     MongoCollection<ReviewJob> reviewJobCollection;
+    @Inject
+    DatadogMetricProbe datadogMetricProbe;
 
     public PreflightResponse check(PreflightRequest request) {
         List<CheckView> checks = new ArrayList<>(machineChecks());
@@ -130,7 +136,13 @@ public class PreflightService {
 
     public List<CheckView> dataChecks(PreflightRequest request) {
         List<CheckView> checks = new ArrayList<>();
-        if (Strings.isBlank(request.mysqlHost)) return checks;
+        addMysqlCheck(checks, request);
+        addAtlasCheck(checks, request);
+        return checks;
+    }
+
+    private void addMysqlCheck(List<CheckView> checks, PreflightRequest request) {
+        if (RequestValues.isAbsent(request.mysqlHost)) return;
         String user = envNameInUse("MYSQL_USER");
         String password = envNameInUse("MYSQL_PASSWORD");
         String settingsEntry = LocalReviewPromptBuilder.mysqlConnectionName(request.mysqlHost, request.mysqlDB);
@@ -144,7 +156,55 @@ public class PreflightService {
             PASS.equals(status) ? null
                 : "Table sizes degrade to a NOT_COLLECTED line. Set MYSQL_USER / MYSQL_PASSWORD, or add the "
                 + "<mysql-host-short>-<db> entry to ~/.gemini/settings.json. The host also needs the VPN."));
-        return checks;
+    }
+
+    /**
+     * Confirms the Atlas cluster name matches a {@code clustername} tag Datadog actually carries.
+     *
+     * <p>Worth a call before the run because the failure is silent: Datadog answers an unknown tag
+     * value with an empty series rather than an error, so every MongoDB metric comes back
+     * {@code NOT_COLLECTED} and the persistence dimension is scored on nothing. The names also do
+     * not follow the MySQL convention — Datadog tags these {@code uat-consumer-main}, not the Azure
+     * {@code ftiuat-} spelling — so a plausible-looking wrong name is the likely mistake, and the
+     * hint answers it with the names this environment actually has.
+     */
+    private void addAtlasCheck(List<CheckView> checks, PreflightRequest request) {
+        if (RequestValues.isAbsent(request.atlasCluster)) return;
+        String name = "Atlas cluster known to Datadog";
+        if (!datadogMetricProbe.hasCredentials()) {
+            checks.add(view("atlas-cluster", name, CATEGORY_DATA, WARN, "no Datadog credentials to check with",
+                "Set DATADOG_API_KEY / DATADOG_APP_KEY, or configure the datadog MCP server in "
+                + "~/.gemini/settings.json. Until then the cluster name goes unverified."));
+            return;
+        }
+        Integer series = datadogMetricProbe.seriesCount(
+            "avg:mongodb.atlas.connections.current{clustername:" + request.atlasCluster + "}");
+        if (series == null) {
+            checks.add(view("atlas-cluster", name, CATEGORY_DATA, WARN, "Datadog could not be reached",
+                "The cluster name goes unverified; the run will still try it."));
+        } else if (series > 0) {
+            checks.add(view("atlas-cluster", name, CATEGORY_DATA, PASS,
+                request.atlasCluster + " reports metrics", null));
+        } else {
+            checks.add(view("atlas-cluster", name, CATEGORY_DATA, WARN,
+                "Datadog has no metrics tagged clustername:" + request.atlasCluster,
+                "Every MongoDB metric will come back NOT_COLLECTED. " + suggestions(request.env)));
+        }
+    }
+
+    /** Cluster names this environment actually has, so the hint answers the question it raises. */
+    private String suggestions(String env) {
+        List<String> clusters = datadogMetricProbe.tagValues(
+            "avg:mongodb.atlas.connections.current{*} by {clustername}", "clustername");
+        if (clusters.isEmpty()) return "No clustername tags found at all — check the Atlas/Datadog integration.";
+        List<String> matching = clusters;
+        if (!Strings.isBlank(env)) {
+            String prefix = env.toLowerCase(Locale.US) + "-";
+            List<String> filtered = clusters.stream().filter(cluster -> cluster.startsWith(prefix)).toList();
+            if (!filtered.isEmpty()) matching = filtered;
+        }
+        if (matching.size() > MAX_SUGGESTIONS) matching = matching.subList(0, MAX_SUGGESTIONS);
+        return "Datadog has: " + String.join(", ", matching);
     }
 
     private CheckView envVariablesCheck(PreflightRequest request) {

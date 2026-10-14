@@ -65,6 +65,9 @@ public class LocalReviewRunPreparer {
             LocalReviewPromptBuilder.metricsPath(runDir),
             LocalReviewPromptBuilder.mysqlTablesPath(runDir),
             LocalReviewPromptBuilder.reviewReportPath(runDir, today),
+            LocalReviewPromptBuilder.validationStaticPath(runDir),
+            LocalReviewPromptBuilder.validationDataPath(runDir),
+            LocalReviewPromptBuilder.validationAdvicePath(runDir),
             LocalReviewPromptBuilder.validationReportPath(runDir, today),
             LocalReviewPromptBuilder.reportSnapshotPath(runDir));
 

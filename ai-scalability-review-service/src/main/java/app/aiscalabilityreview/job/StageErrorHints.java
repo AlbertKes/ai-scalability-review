@@ -43,7 +43,8 @@ public final class StageErrorHints {
         }
         if (message.contains("timed out after")) {
             return "The stage hit its own wall-clock ceiling. Narrowing app_code_paths is the biggest lever on "
-                + "stage 1; skip_validation roughly halves the MCP round-trips of a run.";
+                + "stage 1; skip_validation drops the whole 5A–5D group, which is where most of a run's MCP "
+                + "round-trips are.";
         }
         return null;
     }

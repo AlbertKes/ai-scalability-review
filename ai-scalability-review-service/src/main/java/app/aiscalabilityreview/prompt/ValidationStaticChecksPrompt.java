@@ -1,147 +1,23 @@
 package app.aiscalabilityreview.prompt;
 
-public class ValidateReportTaskPrompt {
-    /**
-     * Validation task prompt.
-     * Placeholders: {{REPORT_FILE}}, {{SERVICE}}, {{ENV}}, {{NAMESPACE}},
-     * {{MYSQL_HOST}}, {{MYSQL_DB}}, {{ATLAS_CLUSTER}}, {{KAFKA_CONSUMER_GROUPS}},
-     * {{MYSQL_TABLES_PATH}}, {{INFRA_REPO_PATH}}, {{APP_REPO_PATH}}
-     */
+/**
+ * Checks 3, 4, 5 and 7 — the validation checks that are answerable from the report alone.
+ *
+ * <p>Cross-source consistency, scoring, projection arithmetic and format are all decided by reading
+ * {@code {{REPORT_FILE}}} against two reference documents. No data source is queried and no
+ * repository is read, so this group starts no MCP server and is given no repository root: it should
+ * reach for no tool but the one that writes its output. Keeping it out of the session that reads
+ * source files is the point of the split — these checks used to re-send every file Check 8 had
+ * opened on each of their own round-trips.
+ */
+public final class ValidationStaticChecksPrompt {
     public static final String CONTENT;
+
+    /** This group reads one file and queries nothing, so it is handed the report and nothing else. */
+    public static final String FILE_REFS;
 
     static {
         CONTENT = """
-        # Scalability Review Validation Task
-
-        You are a quality-assurance engineer performing an **independent validation** of an existing
-        scalability review report. Your objective is to re-query every original data source,
-        cross-check every claim in the report, and produce a structured validation report that
-        identifies inaccuracies, inconsistencies, math errors, and format violations.
-
-        **Important**: Do NOT generate a new scalability review. Your task is strictly to verify
-        the existing report and flag any issues found.
-
-        - **Report to validate**: {{REPORT_FILE}}
-        - **Service**: {{SERVICE}}
-        - **Environment**: {{ENV}}
-        - **Namespace**: {{NAMESPACE}}
-        - **Lookback window**: 28 days (same as report generation)
-        - **MySQL host/cluster**: {{MYSQL_HOST}}  (N/A if service does not use MySQL)
-        - **MySQL database**: {{MYSQL_DB}}  (N/A if MYSQL_HOST is N/A)
-        - **Atlas MongoDB cluster**: {{ATLAS_CLUSTER}}  (N/A if service does not use MongoDB)
-        - **Kafka consumer groups**: {{KAFKA_CONSUMER_GROUPS}}  (comma-separated, or "N/A")
-        - **MySQL table storage**: collected by the pipeline over JDBC into `{{MYSQL_TABLES_PATH}}`.
-          There is no MySQL MCP server in this run; re-read that file instead of querying the database.
-
-        ## Re-querying Datadog
-
-        The report's 28-day figures come from a day-aligned window: `to` = today's 00:00 UTC in epoch
-        seconds, `from` = `to - 2419200`. Use the same window, and the same `.rollup(<aggregator>,
-        86400)` suffix the report's query annotation shows, or your values will not be comparable.
-
-        `query_metrics` returns `series[].pointlist` as `[[<epoch_milliseconds>, <value>], ...]`.
-        Averages, peaks, worst days, per-week totals **and the timestamp of any peak** are all
-        arithmetic over that array — a report that marks one of them `NOT_COLLECTED` because the tool
-        "does not support" it is asserting something false, and Check 6 must fail it.
-
-        ---
-
-        ## Finding Format
-
-        For every individual item verified, use this format:
-
-        ```
-        **[STATUS]** <what was checked>
-          - Reported: `<value or claim from the report>`
-          - Actual: `<value retrieved now>` [Source: <tool call or file path>]
-          - Detail: <explanation of pass / discrepancy / skip reason>
-        ```
-
-        STATUS values:
-        - **PASS** — reported value matches actual within tolerance
-        - **FAIL** — reported value is incorrect or inconsistent beyond tolerance
-        - **WARNING** — minor discrepancy or ambiguity that warrants reviewer attention
-        - **SKIPPED** — check not applicable for this service (e.g., MySQL check when MYSQL_HOST is N/A)
-
-        ---
-
-        ## Check 1 — Config Accuracy
-
-        Parse every row of the "Infrastructure Configuration" table from {{REPORT_FILE}}.
-        For each row, identify its `[Source: ...]` annotation and re-fetch the value from that source.
-
-        ### 1a — Kubernetes / k8s-gitops values (annotated `[Source: code → ...]`)
-
-        Re-read the exact files identified in the source annotations.
-
-        For each file-sourced config value in the report, compare the report's claim against the
-        file content. Verify:
-        - CPU requests and limits
-        - Memory requests and limits
-        - HPA minReplicas, maxReplicas, target metric, and threshold
-        - AKS node pool SKU and min/max nodes (from Terraform, if annotated)
-
-        **Tolerance for static config**: exact match required — no tolerance for CPU/memory
-        requests, limits, or HPA thresholds.
-
-        ### 1b — Azure MCP live config values (annotated `[Source: Azure MCP → ...]`)
-
-        For each value in the report annotated as `[Source: Azure MCP → <tool>(<args>)]`,
-        re-run the identical tool call now. If {{MYSQL_HOST}} is N/A, skip 1b entirely (SKIPPED).
-
-        Re-run each of the following that appears in the report:
-        - `[Source: Azure MCP → get_mysql_flexible_server(name={{MYSQL_HOST}})]`
-        - `[Source: Azure MCP → list_mysql_flexible_server_configurations(server_name={{MYSQL_HOST}})]`
-        - `[Source: Azure MCP → list_mysql_flexible_server_replicas(server_name={{MYSQL_HOST}})]`
-        - `[Source: Azure MCP → get_aks_node_pools(cluster=<name>, resource_group=<rg>)]`
-
-        Compare the reported property value vs. the value returned now.
-
-        **Tolerance**:
-        - Static config (SKU, vCPU count, HA mode, max_connections): exact match required
-        - Storage used (GB): ±10 GB or ±10% is acceptable (data grows between runs)
-
-        ---
-
-        ## Check 2 — Metric Numerical Fidelity
-
-        Parse all metric values from the "Performance Metrics (Last 28 Days)" section of the report.
-        For each bullet with a `[Source: Datadog MCP → query_metrics("...")]` annotation,
-        extract the exact query string and re-run it now.
-
-        Use `env:{{ENV}}` as the base filter and set `from=now-28d`, `to=now`. Datadog accepts
-        several metric expressions in one `query_metrics` call as a comma-separated query string —
-        group the re-checks below into one call per block rather than one call per metric, and never
-        run the same query twice in this session.
-
-        **Metrics to re-verify** (run only the queries that are annotated in the report):
-
-        - Avg RPS: `sum:trace.undertow_http.request.hits{env:{{ENV}},service:{{SERVICE}}}.as_count()`
-        - P50/P95/P99 latency: `p50:trace.undertow_http.request{...}`, `p95:...`, `p99:...`
-        - HTTP error rate: `sum:trace.undertow_http.request.errors{...} / sum:trace.undertow_http.request.hits{...}`
-        - Container restarts: `sum:kubernetes.containers.restarts{env:{{ENV}},service:{{SERVICE}}}`
-        - CPU avg/peak % of limit: `avg:kubernetes.cpu.usage.total{...}` / `max:...`
-        - Memory avg/peak % of limit: `avg:kubernetes.memory.working_set{...}` / `max:...`
-        - MySQL connections avg/peak: `avg:azure.dbformysql_flexibleservers.active_connections{name:{{MYSQL_HOST}}}` (SKIPPED if N/A)
-        - MySQL slow queries: `sum:azure.dbformysql_flexibleservers.slow_queries{...}` (SKIPPED if N/A)
-        - Kafka consumer lag: `max:kafka.consumer_lag{...}` (SKIPPED if {{KAFKA_CONSUMER_GROUPS}} is N/A)
-        - MongoDB operation latency (SKIPPED if {{ATLAS_CLUSTER}} is N/A)
-
-        **Comparison procedure**:
-        1. Run the query.
-        2. Compute the same summary statistic as the report (avg, max, p99, etc.).
-        3. Compare to the reported value.
-
-        **Tolerance**:
-        - Average metrics (avg RPS, P50, avg CPU, avg connections): ±20% acceptable
-        - Peak metrics (max RPS, P99 peak, peak CPU): ±30% acceptable
-        - Count / sum metrics (restarts, slow queries total): ±30% acceptable
-        - Values differing by >50% or directionally reversed (report says LOW, data shows HIGH): FAIL
-        - If report date is >30 days before today: mark all metric re-checks as SKIPPED (temporal drift
-          makes exact comparison meaningless); retrieve current values for informational context only.
-
-        ---
-
         ## Check 3 — Cross-Source Metric Consistency
 
         Verify that the same metric value is stated consistently wherever it appears in the report.
@@ -240,36 +116,6 @@ public class ValidateReportTaskPrompt {
 
         ---
 
-        ## Check 6 — NOT_COLLECTED Authenticity
-
-        Identify every `NOT_COLLECTED: <reason>` instance in {{REPORT_FILE}}.
-        For each one, determine whether the stated inability to collect was legitimate.
-
-        **Procedure**:
-        1. Parse the NOT_COLLECTED item: metric or config name, reason stated, and source attempted.
-        2. Attempt to query the same source now using the same tool and parameters.
-        3. Evaluate:
-           - Query fails for the same reason as stated → **PASS** (NOT_COLLECTED was legitimate)
-           - Query succeeds and returns data → **FAIL** (NOT_COLLECTED was a false assertion; data exists)
-           - Query fails for a different reason → **WARNING** (reason may be stale; claim is uncertain)
-           - Metric omitted but the service config indicates it applies (e.g., MySQL metrics omitted
-             when `{{MYSQL_HOST}}` is not N/A) → **FAIL** (metric was required but absent without justification)
-
-        **Legitimate omissions** (mark SKIPPED, not FAIL):
-        - Kafka metrics when `{{KAFKA_CONSUMER_GROUPS}}` is N/A
-        - MySQL metrics when `{{MYSQL_HOST}}` is N/A
-        - MongoDB metrics when `{{ATLAS_CLUSTER}}` is N/A
-
-        **Never legitimate** (always FAIL, no re-query needed): a reason that claims the derivation
-        itself was impossible rather than the query — "complex data derivation", "beyond current
-        capabilities", "does not support timestamp extraction", or any variant. The data was returned;
-        only the arithmetic was skipped.
-
-        **Temporal note**: If the report is >30 days old and a metric is now available that may not
-        have been at generation time, mark WARNING rather than FAIL.
-
-        ---
-
         ## Check 7 — Format & Attribution Completeness
 
         Verify the report structure against the mandatory format in the **Report Format Reference**
@@ -363,15 +209,22 @@ public class ValidateReportTaskPrompt {
         label → FAIL.
 
         ---
+            """;
 
-{{CHECK_8}}        ## Output
+        FILE_REFS = """
 
-        Produce a complete validation report following the format defined in the
-        **Validation Format Reference** section below.
 
-        Execute all 8 checks before writing the output. Do not omit any check —
-        use STATUS: SKIPPED for checks not applicable to this service.
-        Every finding must include a concrete reported value, actual value, and source.
-            """.replace("{{CHECK_8}}", RecommendationSoundnessPrompt.CONTENT);
+        ## Attached Local Files
+
+        **Review report to validate**:
+        @{{REPORT_FILE}}
+
+        Every one of your checks is decided from that report plus the two reference sections below.
+        No data source and no repository is in scope for this session; if a check appears to need
+        one, it belongs to another session and you should not attempt it.
+            """;
+    }
+
+    private ValidationStaticChecksPrompt() {
     }
 }

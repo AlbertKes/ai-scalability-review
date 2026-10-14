@@ -31,6 +31,10 @@ public final class LocalReviewOutputPaths {
     public static final String METRICS = "metrics.md";
     public static final String MYSQL_TABLES = "mysql-tables.md";
     public static final String REPORT_SNAPSHOT = "report-snapshot.json";
+    /** One per validation session; the merged `<date>-validation.md` is assembled from the three. */
+    public static final String VALIDATION_STATIC = "validation-static.md";
+    public static final String VALIDATION_DATA = "validation-data.md";
+    public static final String VALIDATION_ADVICE = "validation-advice.md";
     public static final String RUN_STATS = "run-stats.md";
     public static final String RUN_MANIFEST = "run.json";
     /** Points at the newest run of a service, so the existing command-line workflow still works. */

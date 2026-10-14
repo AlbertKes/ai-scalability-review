@@ -4,12 +4,17 @@ package app.aiscalabilityreview.prompt;
  * Check 8 of the validation — the one that re-verifies the report's <em>advice</em> rather than its
  * data.
  *
- * <p>Held apart from {@link ValidateReportTaskPrompt} because it is a different kind of check:
- * checks 1 to 7 ask whether the numbers are right, this one asks whether the recommendations built
- * on them are sound, and it is the only check that reads the application source.
+ * <p>Held apart from the other checks because it is a different kind of check: checks 1 to 7 ask
+ * whether the numbers are right, this one asks whether the recommendations built on them are sound,
+ * and it is the only check that reads the application source. That last property is why it now runs
+ * in a session of its own — the files it opens used to stay in the context of every later
+ * round-trip, including the ones that were only re-reading the report's own markdown.
  */
 public final class RecommendationSoundnessPrompt {
     public static final String CONTENT;
+
+    /** The two repository roots this check reads, and the rule that keeps it from searching them. */
+    public static final String FILE_REFS;
 
     static {
         CONTENT = """
@@ -97,6 +102,27 @@ public final class RecommendationSoundnessPrompt {
         WARNING when the source contradicts the finding.
 
         ---
+            """;
+
+        FILE_REFS = """
+
+
+        ## Attached Local Files
+
+        **Review report to validate**:
+        @{{REPORT_FILE}}
+
+        **Application repository root**:
+        Local path: `{{APP_REPO_PATH}}`
+
+        **Infra repository root**:
+        Local path: `{{INFRA_REPO_PATH}}`
+
+        A claim annotated `[Source: context -> code-context.md]` was written by an earlier model stage
+        and is not evidence of itself, so re-read the class, migration SQL, module registration or
+        property file under these roots before accepting or rejecting it. Open the path the report
+        cites rather than searching for it — the repository is large, every tool call re-sends the
+        whole context, and a whole-directory read would cost more than the check is worth.
             """;
     }
 

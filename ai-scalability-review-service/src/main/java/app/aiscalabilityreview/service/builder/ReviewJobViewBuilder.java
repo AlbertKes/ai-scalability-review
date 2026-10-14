@@ -98,7 +98,7 @@ public class ReviewJobViewBuilder {
     }
 
     /**
-     * Always returns all five stages in pipeline order, including the ones that have not started —
+     * Always returns every stage in pipeline order, including the ones that have not started —
      * a timeline that grows a row at a time cannot show what is still to come.
      */
     private List<StageView> stages(ReviewJob job) {
