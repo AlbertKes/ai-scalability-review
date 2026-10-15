@@ -1,0 +1,15 @@
+{
+  "traffic_score": "RED",
+  "latency_score": "RED",
+  "errors_score": "GREEN",
+  "resources_score": "YELLOW",
+  "persistence_score": "RED",
+  "overall_score": "RED",
+  "avg_rps": 0.46,
+  "p99_latency_ms": 1.86,
+  "error_rate_pct": 0.0,
+  "cpu_avg_pct": 0.47,
+  "mem_avg_pct": 18.99,
+  "mysql_connection_pct": 33.99,
+  "mysql_replication_lag_s": 340.50
+}
