@@ -41,7 +41,7 @@ public class DatadogMetricsStage {
             String label = qDef[0];
             String query = qDef[1];
             metricsText.append("### ").append(label)
-                    .append("\n`[Source: Datadog MCP → query_metrics(\"").append(query).append("\")]`\n\n");
+                    .append("\n`[Source: Datadog MCP → query-metrics(\"").append(query).append("\")]`\n\n");
             queryMetrics(context, query, from, now, metricsText, svc);
         }
 

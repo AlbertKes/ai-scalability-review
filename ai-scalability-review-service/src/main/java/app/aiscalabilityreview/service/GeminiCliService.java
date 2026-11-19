@@ -63,6 +63,9 @@ public class GeminiCliService {
     private static final String CLOUD_PROJECT = "GOOGLE_CLOUD_PROJECT";
     private static final String CLOUD_PROJECT_ID = "GOOGLE_CLOUD_PROJECT_ID";
     private static final String CLOUD_LOCATION = "GOOGLE_CLOUD_LOCATION";
+    private static final String DD_TOOLS = "DD_TOOLS";
+    private static final String DD_ALLOW_WRITE = "DD_ALLOW_WRITE";
+    private static final String DATADOG_TOOL_CATEGORIES = "metrics,monitors";
 
     private final Logger logger = LoggerFactory.getLogger(GeminiCliService.class);
     private final String cloudProject;
@@ -115,6 +118,7 @@ public class GeminiCliService {
             pb.directory(workDir.toFile());
             pb.redirectError(stderrFile.toFile());
             pinVertexAuth(pb.environment());
+            scopeDatadogMcp(pb.environment());
 
             long startMs = System.currentTimeMillis();
             Process process = pb.start();
@@ -180,6 +184,23 @@ public class GeminiCliService {
         env.put(CLOUD_LOCATION, cloudLocation);
         env.put(USE_VERTEX_AI, "true");
         logger.info("Gemini CLI auth: Vertex AI via Application Default Credentials, project={}, location={}", cloudProject, cloudLocation);
+    }
+
+    /**
+     * Narrows the {@code @us-all/datadog-mcp} server to the tools a review calls, and keeps it read-only.
+     *
+     * <p>That server registers 160-odd tools across 16 categories, and every schema is re-sent to the
+     * model on each round-trip — roughly 25K tokens, against about 4K for the {@code metrics} and
+     * {@code monitors} categories that hold {@code query-metrics}, {@code get-monitors} and the SLO
+     * tools. The CLI hands its own environment to stdio MCP servers, so setting the server's
+     * variables here reaches it; a value set in the server's {@code env} block in
+     * {@code ~/.gemini/settings.json} still wins. Writes are off by default in that server already;
+     * pinning {@code DD_ALLOW_WRITE=false} keeps an inherited {@code true} from reaching a run that
+     * executes with {@code --yolo}.
+     */
+    void scopeDatadogMcp(Map<String, String> env) {
+        env.put(DD_TOOLS, DATADOG_TOOL_CATEGORIES);
+        env.put(DD_ALLOW_WRITE, "false");
     }
 
     private List<String> command(GeminiRunRequest request, Path promptFile, String sessionId) {

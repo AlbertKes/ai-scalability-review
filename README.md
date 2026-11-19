@@ -113,13 +113,24 @@ must never read as one that passed.
 Stage 3's Datadog queries are all `.rollup(<aggregator>, 86400)` (or `3600` for peak RPS) over a
 day-aligned 28-day window. That is what makes the per-day and per-week figures derivable at all, and
 it also keeps each response to 28 points instead of several thousand — the same correctness fix pays
-for itself in tokens.
+for itself in tokens. Each call is also sized to stay under the Gemini CLI's 40,000-character tool
+output limit, beyond which the middle of the response is silently dropped: at most 8 daily series per
+call, peak RPS fetched one week at a time, and multi-topic Kafka groups capped with `top(…, 8)`.
 
 ### Prerequisites
 
 The Gemini CLI must be on `PATH` and its MCP servers configured in `~/.gemini/settings.json` under
 the names `datadog` and `azure`. Each stage is started with only the servers it needs, so a server
 configured under a different name is simply not available to the run.
+
+The `datadog` entry must run [`@us-all/datadog-mcp`](https://www.npmjs.com/package/@us-all/datadog-mcp)
+with `DD_API_KEY`, `DD_APP_KEY` and `DD_SITE` in its `env`. The prompts call its hyphenated tools
+(`query-metrics`, `get-monitors`, `list-slos`, `slo-compliance-snapshot`) and work around its
+response quirks — point timestamps are mis-converted, and one bad expression empties a whole batched
+query. Every run starts it with `DD_TOOLS=metrics,monitors`, which cuts its tool schemas from about
+25K to 4K tokens per round-trip while keeping the SLO tools, and with `DD_ALLOW_WRITE=false`. The
+preflight's Atlas cluster probe reads the same keys, and still accepts the `DATADOG_*` names of the
+previous server.
 
 MySQL table storage is **not** collected through an MCP server. Gemini CLI 0.46 JSON-parses the
 first text block of every MCP response into `structuredContent`, which the MCP SDK then validates

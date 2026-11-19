@@ -51,7 +51,7 @@ public class ReviewTaskPrompt {
           use the repository path shown in that file's heading, not the context file name.
         - `[Source: context → code-context.md]` — a value from the business context document.
         - `[Source: Azure MCP → <tool name>(<args>)]`, `[Source: MySQL (<host>/<db>) → <exact SQL query>]`,
-          `[Source: Datadog MCP → query_metrics("<exact metric query>")]` — copy the annotation
+          `[Source: Datadog MCP → query-metrics("<exact metric query>")]` — copy the annotation
           verbatim from `{{METRICS_PATH}}`.
 
         If a value is marked `NOT_COLLECTED: <reason>` in the input files, carry that marker and its

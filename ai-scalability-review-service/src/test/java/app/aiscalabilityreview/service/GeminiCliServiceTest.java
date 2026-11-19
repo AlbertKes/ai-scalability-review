@@ -54,6 +54,17 @@ class GeminiCliServiceTest {
     }
 
     @Test
+    void narrowsTheDatadogServerToTheReviewToolsAndKeepsItReadOnly() {
+        env.put("DD_ALLOW_WRITE", "true");
+
+        service.scopeDatadogMcp(env);
+
+        assertThat(env)
+            .containsEntry("DD_TOOLS", "metrics,monitors")
+            .containsEntry("DD_ALLOW_WRITE", "false");
+    }
+
+    @Test
     void refusesToStartWithoutAConfiguredProject() {
         assertThatThrownBy(() -> new GeminiCliService(" ", "global"))
             .isInstanceOf(IllegalArgumentException.class)

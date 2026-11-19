@@ -173,7 +173,7 @@ public class PreflightService {
         String name = "Atlas cluster known to Datadog";
         if (!datadogMetricProbe.hasCredentials()) {
             checks.add(view("atlas-cluster", name, CATEGORY_DATA, WARN, "no Datadog credentials to check with",
-                "Set DATADOG_API_KEY / DATADOG_APP_KEY, or configure the datadog MCP server in "
+                "Set DD_API_KEY / DD_APP_KEY, or configure the datadog MCP server in "
                 + "~/.gemini/settings.json. Until then the cluster name goes unverified."));
             return;
         }

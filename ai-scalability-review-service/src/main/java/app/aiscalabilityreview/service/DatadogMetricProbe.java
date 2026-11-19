@@ -37,8 +37,26 @@ import java.util.Map;
 public class DatadogMetricProbe {
     private static final Path GEMINI_SETTINGS = Path.of(System.getProperty("user.home"), ".gemini", "settings.json");
     private static final String DEFAULT_SITE = "datadoghq.com";
+    private static final List<String> CREDENTIAL_PREFIXES = List.of("DD_", "DATADOG_");
     private static final long WINDOW_SECONDS = 7L * 24 * 3600;
     private static final Duration TIMEOUT = Duration.ofSeconds(15);
+
+    /**
+     * Reads either naming: {@code @us-all/datadog-mcp} takes {@code DD_API_KEY / DD_APP_KEY / DD_SITE},
+     * the previous {@code mcp-server-datadog} took {@code DATADOG_API_KEY / DATADOG_APP_KEY / DATADOG_SITE}.
+     * A settings file written for either server keeps working.
+     */
+    static Credentials readCredentials(Map<String, String> env) {
+        for (String prefix : CREDENTIAL_PREFIXES) {
+            String apiKey = env.get(prefix + "API_KEY");
+            String appKey = env.get(prefix + "APP_KEY");
+            if (!Strings.isBlank(apiKey) && !Strings.isBlank(appKey)) {
+                String site = env.get(prefix + "SITE");
+                return new Credentials(apiKey, appKey, Strings.isBlank(site) ? DEFAULT_SITE : site);
+            }
+        }
+        return null;
+    }
 
     private final Logger logger = LoggerFactory.getLogger(DatadogMetricProbe.class);
 
@@ -108,13 +126,8 @@ public class DatadogMetricProbe {
     }
 
     private Credentials credentials() {
-        String apiKey = System.getenv("DATADOG_API_KEY");
-        String appKey = System.getenv("DATADOG_APP_KEY");
-        if (!Strings.isBlank(apiKey) && !Strings.isBlank(appKey)) {
-            String site = System.getenv("DATADOG_SITE");
-            return new Credentials(apiKey, appKey, Strings.isBlank(site) ? DEFAULT_SITE : site);
-        }
-        return geminiCredentials();
+        Credentials fromEnv = readCredentials(System.getenv());
+        return fromEnv != null ? fromEnv : geminiCredentials();
     }
 
     /** The Gemini CLI's own Datadog entry, so the probe and the run share one set of keys. */
@@ -126,18 +139,14 @@ public class DatadogMetricProbe {
             if (settings.mcpServers == null) return null;
             McpServer datadog = settings.mcpServers.get("datadog");
             if (datadog == null || datadog.env == null) return null;
-            String apiKey = datadog.env.get("DATADOG_API_KEY");
-            String appKey = datadog.env.get("DATADOG_APP_KEY");
-            if (Strings.isBlank(apiKey) || Strings.isBlank(appKey)) return null;
-            String site = datadog.env.get("DATADOG_SITE");
-            return new Credentials(apiKey, appKey, Strings.isBlank(site) ? DEFAULT_SITE : site);
+            return readCredentials(datadog.env);
         } catch (IOException | RuntimeException e) {
             logger.warn("Could not read the Datadog credentials from {}: {}", GEMINI_SETTINGS, e.getMessage());
             return null;
         }
     }
 
-    private record Credentials(String apiKey, String appKey, String site) {
+    record Credentials(String apiKey, String appKey, String site) {
     }
 
     public static class QueryResponse {

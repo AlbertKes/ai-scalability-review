@@ -111,9 +111,44 @@ class LocalReviewPromptBuilderTest {
             .contains(".as_count().rollup(sum, 86400)")
             .contains(".as_count().rollup(sum, 3600)")
             .contains("`to - 2419200`")
-            .contains("epoch milliseconds")
-            .contains("get_monitors")
-            .doesNotContain("list_monitors");
+            .doesNotContain("{{");
+    }
+
+    /** The @us-all/datadog-mcp server names its tools with hyphens and mangles point timestamps. */
+    @Test
+    void metricCollectionPromptTargetsTheUsAllDatadogServer() {
+        assertThat(LocalReviewPromptBuilder.buildMetricCollectionPrompt(metricParams()))
+            .contains("query-metrics(\"<exact metric query>\")")
+            .contains("Call `get-monitors` with `tags = \"service:wonder-cart-service\"`")
+            .contains("`list-slos` with `tagsQuery = \"service:wonder-cart-service\"`")
+            .contains("`slo-compliance-snapshot`")
+            .contains("Never read a date from `points[].timestamp`")
+            .contains("Keep every response under 40,000 characters")
+            .contains("issue **four** `query-metrics` calls, one per week")
+            .doesNotContain("pointlist`")
+            .doesNotContain("exposes no SLO tool");
+    }
+
+    /** Averages need an average rollup, and Atlas dbstats must be summed per replica-set member. */
+    @Test
+    void metricCollectionPromptAveragesWithAnAverageRollup() {
+        assertThat(LocalReviewPromptBuilder.buildMetricCollectionPrompt(metricParams()))
+            .contains("avg:kafka.consumer_lag{env:uat,consumer_group:<group>} by {topic}.rollup(avg, 86400)")
+            .contains("avg:azure.dbformysql_flexibleservers.replication_lag{name:")
+            .contains("sum:mongodb.atlas.dbstats.data.size{clustername:")
+            .contains("by {host}.rollup(max, 86400)")
+            .contains("mongodb.atlas.system.disk.space.used")
+            .doesNotContain("avg:mongodb.atlas.dbstats");
+    }
+
+    @Test
+    void validationDataChecksUseTheDayAlignedWindowAndTheUsAllTools() {
+        assertThat(ValidationDataChecksPrompt.CONTENT)
+            .contains("query-metrics(\"...\")")
+            .contains("`list-slos`")
+            .contains("Never read a date from `points[].timestamp`")
+            .doesNotContain("from=now-28d")
+            .doesNotContain("query_metrics(");
     }
 
     @Test

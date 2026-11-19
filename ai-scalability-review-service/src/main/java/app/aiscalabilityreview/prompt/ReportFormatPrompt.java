@@ -197,7 +197,8 @@ public class ReportFormatPrompt {
         - **MongoDB op latency**: read average `<value> ms`, write average `<value> ms`, read peak `<value> ms` [Source: ...]
         - **MongoDB connections**: peak `<value>` (`<value>%` of the cluster limit `<value>`) [Source: ...]
         - **MongoDB query targeting ratio**: average `<value>`, peak `<value>` [Source: ...]
-        - **MongoDB storage**: data `<value> GB`, indexes `<value> GB` (`<value>%` of data), `<value>` collections, `<value>` documents; 28-day data growth `<value>%` [Source: ...]
+        - **MongoDB storage** (cluster `<name>`, shared): data `<value> GB`, indexes `<value> GB` (`<value>%` of data), `<value>` collections, `<value>` documents; 28-day data growth `<value>%` [Source: ...]
+        - **MongoDB disk**: fullest member `<value> GB` of `<value> GB` (`<value>%`) [Source: ...]
 
         ### 3.6 Kafka Consumer Lag
         Include this sub-section only when the service has Kafka consumer groups; omit it entirely
@@ -208,7 +209,7 @@ public class ReportFormatPrompt {
         | `<group>` | `<topic>` | `<value>` | `<value>` |
 
         ### 3.7 SLO & Monitors
-        - **SLO compliance**: <per SLO: name and compliance figure, or None defined> [Source: ...]
+        - **SLO compliance**: <per SLO: name — target `<value>%` over `<timeframe>`, 28-day attainment `<value>%`, error budget remaining `<value>%`, `<status>`; or None defined> [Source: ...]
         - **Monitors in ALERT or WARN**: <per monitor: name and state, or None> [Source: ...]
         ```
 

@@ -37,13 +37,14 @@ public class MetricCollectionTaskPrompt {
         - `from` = `to - 2419200` (28 × 86400).
 
         Compute both numbers once, state them at the top of your working, and pass exactly those
-        values to every `query_metrics` call. Do not use `now` as `to` — a partial final day makes
+        values to every `query-metrics` call. Do not use `now` as `to` — a partial final day makes
         the last daily bucket and the last week incomplete.
 
         ## Rules
 
         1. **Attribution.** Every value you write carries the source that produced it:
-           - `[Source: Datadog MCP → query_metrics("<exact metric query>")]`
+           - `[Source: Datadog MCP → query-metrics("<exact metric query>")]`
+           - `[Source: Datadog MCP → <tool name>(<args>)]` for monitors and SLOs
            - `[Source: Azure MCP → <tool name>(<args>)]`
            When you fetch several metrics in one batched call, annotate each value with **its own**
            query expression, not the batched string.
@@ -58,37 +59,29 @@ public class MetricCollectionTaskPrompt {
            "the MCP does not support …" or "timestamp extraction is not supported" — if the numbers
            are in the response, compute them. Never guess and never estimate.
         4. **Minimise round-trips.** Datadog accepts several metric expressions in a single
-           `query_metrics` call as a comma-separated query string. Group the queries below into one
-           call per group. Do not re-run a query you already ran in this session; reuse the result.
+           `query-metrics` call as a comma-separated query string. Make exactly the calls listed
+           below — they are sized to stay under the response limit described further down. Do not
+           re-run a query you already ran in this session; reuse the result.
         5. **Skip conditions are explicit.** When a block says "skip if X is N/A" and X is N/A, write
            the section heading followed by `SKIPPED: <parameter> is N/A` instead of dropping it.
 
-        ## Reading a `query_metrics` response
+            """ + DatadogMcpPrompt.RESPONSE_RULES + """
 
-        The tool returns `{"response": {"status": ..., "series": [...]}}`. Each entry of `series`
-        carries:
-
-        - `expression` — which of the comma-separated expressions this series answers. Match series
-          to expression by this field, never by position in the array.
-        - `pointlist` — `[[<epoch_milliseconds>, <value>], …]`, oldest first.
-        - `unit` — the unit of `value`. Note its `scaleFactor`: it is what a dashboard would apply
-          to *render* the number, and you must not apply it twice.
-
-        Everything below this line is arithmetic over `pointlist`, and all of it is your job:
+        Everything below this line is arithmetic over `points`, and all of it is your job:
 
         - **Average over the window** = the mean of the point values.
-        - **Peak** = the point with the largest value. Its **timestamp is that point's first
-          element**, in epoch milliseconds: divide by 1000 and format it as `YYYY-MM-DD HH:mm UTC`.
-          Every peak has a timestamp, because every point carries one.
+        - **Peak** = the point with the largest value. Its time is derived from its index as above
+          and formatted `YYYY-MM-DD HH:mm UTC` — `YYYY-MM-DD` for a daily bucket.
         - **Worst day** = with a `rollup(…, 86400)` bucket, the bucket with the worst value; its date
-          is that bucket's timestamp.
+          is `from + i × 86400`.
         - **Point values are raw.** Use them exactly as returned and convert them with the rule
           stated in each group. Never copy a pre-rounded figure out of `displayName` or `unit`, and
           sanity-check the magnitude: one raw `kubernetes.cpu.usage.total` point for a live pod is
           in the millions of nanocores (1e6 – 1e9), never single digits.
-        - **A missing series is not a failed query.** `status: "ok"` with no series for an
-          expression means that metric reported nothing in the window: write `0` for an
-          `.as_count()` sum and `NOT_COLLECTED: no data reported in the window` for a gauge.
+        - **An average comes from an average rollup.** A `rollup(max, …)` series answers "what was
+          the worst moment of each day"; the mean of those daily maxima is not an average and must
+          never be reported as one. Wherever a group below asks for an average and a peak, it gives
+          one expression for each — use each for its own figure.
         - **Bucket with `.rollup(<aggregator>, <seconds>)`** wherever a group asks for per-day or
           per-week figures. It is the only way to get one point per bucket, and it also keeps the
           response small: an unrolled 28-day query returns thousands of points and costs far more
@@ -98,7 +91,7 @@ public class MetricCollectionTaskPrompt {
 
         ## Group 1 — Datadog: daily traffic, latency, errors
 
-        One `query_metrics` call, query string = these expressions joined by commas. Each returns
+        One `query-metrics` call, query string = these expressions joined by commas. Each returns
         exactly 28 daily points over the aligned window:
 
         - `sum:trace.undertow_http.request.hits{env:{{ENV}},service:{{SERVICE}}}.as_count().rollup(sum, 86400)`
@@ -135,15 +128,18 @@ public class MetricCollectionTaskPrompt {
 
         ## Group 2 — Datadog: peak RPS
 
-        Peak RPS needs a finer bucket than a day. One `query_metrics` call:
+        Peak RPS needs a finer bucket than a day. 672 hourly points do not fit in one response, so
+        issue **four** `query-metrics` calls, one per week — `from + k × 604800` to
+        `from + (k + 1) × 604800` for `k` = 0…3 — each with:
 
         - `sum:trace.undertow_http.request.hits{env:{{ENV}},service:{{SERVICE}}}.as_count().rollup(sum, 3600)`
 
-        **Peak RPS** = (largest hourly bucket) / 3600, recorded with the timestamp of that bucket.
+        Each returns 168 points. **Peak RPS** = (largest hourly bucket across the four) / 3600,
+        recorded with the time of that bucket: its week's `from` + index × 3600.
 
         ## Group 3 — Datadog: resource saturation
 
-        One `query_metrics` call with these expressions:
+        One `query-metrics` call with these expressions:
 
         - `avg:kubernetes.cpu.usage.total{env:{{ENV}},service:{{SERVICE}}}.rollup(avg, 86400)`
         - `max:kubernetes.cpu.usage.total{env:{{ENV}},service:{{SERVICE}}}.rollup(max, 86400)`
@@ -165,53 +161,81 @@ public class MetricCollectionTaskPrompt {
 
         ## Group 4 — Datadog: Kafka consumer lag
 
-        Skip if {{KAFKA_CONSUMER_GROUPS}} is N/A. Otherwise issue **one query per consumer group**
-        (a comma-separated tag value is an AND filter in Datadog and would return nothing):
+        Skip if {{KAFKA_CONSUMER_GROUPS}} is N/A. Otherwise issue **two calls per consumer group**
+        (a comma-separated tag value is an AND filter in Datadog and would return nothing), one per
+        expression. A group can consume dozens of topics, so each is capped to its 8 worst topics:
 
-        `max:kafka.consumer_lag{env:{{ENV}},consumer_group:<group>} by {topic}.rollup(max, 86400)`
+        - `top(avg:kafka.consumer_lag{env:{{ENV}},consumer_group:<group>} by {topic}.rollup(avg, 86400), 8, 'mean', 'desc')`
+        - `top(max:kafka.consumer_lag{env:{{ENV}},consumer_group:<group>} by {topic}.rollup(max, 86400), 8, 'max', 'desc')`
 
-        One series comes back per topic; read the topic from each series' `scope` or `tagSet`.
-        Record, per group and topic: 28-day average lag, peak lag and the date of the peak, all in
-        messages.
+        One series comes back per topic; read the topic from each series' `scope`. Record, all in
+        messages, per group and per topic that appears in either call: the 28-day average lag = the
+        mean of its `rollup(avg, …)` series, and the peak lag with its date from its
+        `rollup(max, …)` series. A topic missing from one call is outside that call's top 8 — write
+        `< <the 8th value>` for it rather than a number. Measured on one live topic over the same
+        28 days, the mean of the daily maxima was 2.82 while the true average was 0.03 — the two
+        answer different questions.
 
         ## Group 5 — Datadog: database metrics
 
-        Skip the MySQL expressions if {{MYSQL_HOST}} is N/A, and the MongoDB ones if
-        {{ATLAS_CLUSTER}} is N/A. Otherwise one `query_metrics` call with the applicable expressions:
+        Skip the MySQL call if {{MYSQL_HOST}} is N/A, and the three MongoDB calls if
+        {{ATLAS_CLUSTER}} is N/A. Each list below is **one** `query-metrics` call.
 
         A datastore the service does not use is **absent, not missing**. Say nothing about it at
         all: no row, no `NOT_COLLECTED` line, no "N/A". `NOT_COLLECTED` means data this review
         should have and could not get, and diluting it with things that were never applicable is
         what makes a reader stop reading it.
 
+        MySQL:
         - `avg:azure.dbformysql_flexibleservers.active_connections{name:{{MYSQL_HOST}}}.rollup(avg, 86400)`
         - `max:azure.dbformysql_flexibleservers.active_connections{name:{{MYSQL_HOST}}}.rollup(max, 86400)`
         - `sum:azure.dbformysql_flexibleservers.slow_queries{name:{{MYSQL_HOST}}}.as_count().rollup(sum, 86400)`
+        - `avg:azure.dbformysql_flexibleservers.replication_lag{name:{{MYSQL_HOST}}-*}.rollup(avg, 86400)`
         - `max:azure.dbformysql_flexibleservers.replication_lag{name:{{MYSQL_HOST}}-*}.rollup(max, 86400)`
         - `max:azure.dbformysql_flexibleservers.storage_used{name:{{MYSQL_HOST}}}.rollup(max, 86400)`
+
+        MongoDB performance:
         - `avg:mongodb.atlas.oplatencies.reads.avg{clustername:{{ATLAS_CLUSTER}}}.rollup(avg, 86400)`
         - `avg:mongodb.atlas.oplatencies.writes.avg{clustername:{{ATLAS_CLUSTER}}}.rollup(avg, 86400)`
         - `max:mongodb.atlas.oplatencies.reads.avg{clustername:{{ATLAS_CLUSTER}}}.rollup(max, 86400)`
         - `max:mongodb.atlas.connections.current{clustername:{{ATLAS_CLUSTER}}}.rollup(max, 86400)`
         - `avg:mongodb.atlas.metrics.queryexecutor.scannedperreturned{clustername:{{ATLAS_CLUSTER}}}.rollup(avg, 86400)`
         - `avg:mongodb.atlas.metrics.queryexecutor.scannedperreturned{clustername:{{ATLAS_CLUSTER}}}.rollup(max, 86400)`
-        - `avg:mongodb.atlas.dbstats.data.size{clustername:{{ATLAS_CLUSTER}}}.rollup(max, 86400)`
-        - `avg:mongodb.atlas.dbstats.index.size{clustername:{{ATLAS_CLUSTER}}}.rollup(max, 86400)`
-        - `avg:mongodb.atlas.dbstats.collections{clustername:{{ATLAS_CLUSTER}}}.rollup(max, 86400)`
-        - `avg:mongodb.atlas.dbstats.objects{clustername:{{ATLAS_CLUSTER}}}.rollup(max, 86400)`
+
+        MongoDB storage:
+        - `top(sum:mongodb.atlas.dbstats.data.size{clustername:{{ATLAS_CLUSTER}}} by {host}.rollup(max, 86400), 1, 'last', 'desc')`
+        - `top(sum:mongodb.atlas.dbstats.index.size{clustername:{{ATLAS_CLUSTER}}} by {host}.rollup(max, 86400), 1, 'last', 'desc')`
+        - `top(sum:mongodb.atlas.dbstats.collections{clustername:{{ATLAS_CLUSTER}}} by {host}.rollup(max, 86400), 1, 'last', 'desc')`
+        - `top(sum:mongodb.atlas.dbstats.objects{clustername:{{ATLAS_CLUSTER}}} by {host}.rollup(max, 86400), 1, 'last', 'desc')`
+
+        MongoDB disk:
+        - `max:mongodb.atlas.system.disk.space.used{clustername:{{ATLAS_CLUSTER}}} by {host}.rollup(max, 86400)`
+        - `max:mongodb.atlas.system.disk.space.free{clustername:{{ATLAS_CLUSTER}}} by {host}.rollup(min, 86400)`
 
         The Atlas aggregators above are not interchangeable, so copy them as written.
         `connections.current` takes `max:` because the busiest member is the one that runs out of
-        connections. Everything else takes `avg:`, because every member of the replica set reports
-        the same database — measured on a four-member cluster, `avg:` gives the true 8.0 GB,
-        `max:` gives 80 GB and `sum:` gives 642 GB. And the targeting ratio is a **ratio**: summing
-        it over a day multiplies it by the number of samples, which turned a real 1.5–62 into
-        50,000–2,000,000 and scored every MongoDB service RED on a threshold of 100.
+        connections. The targeting ratio is a **ratio**: summing it over a day multiplies it by the
+        number of samples, which turned a real 1.5–62 into 50,000–2,000,000 and scored every MongoDB
+        service RED on a threshold of 100.
+
+        `dbstats` is reported **once per database on every replica-set member**, and the Atlas
+        integration leaves the `database` tag empty (`database:N/A`), so per-database figures are not
+        available from Datadog. `sum:… by {host}` adds up the databases on each member, and
+        `top(…, 1, 'last', 'desc')` keeps the largest member — every member holds a full copy, so
+        their totals agree to within replication delay. A bare `avg:` over the cluster averages
+        across databases and members and yields the size of an average database, not of anything
+        that exists (measured: `avg:` 3.5 GB
+        and 9.6 collections against a real 66.7 GB and 182 collections).
+
+        These are **cluster-wide** figures. The cluster is usually shared by many services, so they
+        describe the capacity of the cluster this service depends on, not data this service owns.
 
         Record, each with the date of its peak bucket:
         - Active connections: 28-day average and peak.
         - Slow queries: daily average = (sum of all buckets) / 28, and the worst single day.
-        - Replication lag: 28-day average and peak, in seconds.
+        - Replication lag: the 28-day average = the mean of the `rollup(avg, …)` series, and the peak
+          from the `rollup(max, …)` series, in seconds. The replica-name wildcard covers every
+          replica of the server.
         - Storage used, in GB: the **last** bucket is the current figure, and last minus first is the
           28-day growth. Report those two, not an average — storage only ever grows, so its mean over
           the window describes no moment that existed.
@@ -227,27 +251,23 @@ public class MetricCollectionTaskPrompt {
         - MongoDB query targeting ratio (documents scanned per document returned): the 28-day
           average from the `rollup(avg, ...)` series and the worst day from the `rollup(max, ...)`
           one. Report both; a healthy average hides the day a collection scan ran.
-        - MongoDB storage: data size and index size in GB, the collection count, and the document
-          count. The `data.size` and `index.size` points are **bytes**: divide by 1024³ once, and
-          only once. Sanity-check the result — a cluster holding tens of millions of documents is
-          not 8 bytes and not 8 petabytes. If the converted figure is implausible, write
-          `NOT_COLLECTED: dbstats unit unexpected — raw value <value>` rather than publishing it.
-          Also report the 28-day growth of data size and document count: last minus first, as a
-          percentage. That trend, not the absolute size, is what says whether the cluster tier
-          holds for another quarter.
+        - MongoDB storage (cluster-wide, from the one series each `top(…, 1, …)` returns):
+          data size and index size in GB, the collection count and the document count, each from the
+          **last** bucket. The `data.size` and `index.size` points are **bytes** (their `unit` is
+          `null`): divide by 1024³ once, and only once. Sanity-check the result — a cluster holding
+          tens of millions of documents is not 8 bytes and not 8 petabytes. If the converted figure
+          is implausible, write `NOT_COLLECTED: dbstats unit unexpected — raw value <value>` rather
+          than publishing it. Also report the 28-day growth of data size and document count: last
+          minus first, as a percentage. That trend, not the absolute size, is what says whether the
+          cluster tier holds for another quarter.
+        - MongoDB disk: per member, used and free bytes from the last bucket; record the member with
+          the highest `used / (used + free)` — its used GB, its total GB and that percentage. This is
+          the figure that runs out first, because data, indexes and the oplog all live on it.
+          `dbstats.data.size` is the **uncompressed** size of the documents, so it can exceed the
+          disk used several times over (measured: 228 GB of data on 64 GB of disk). That is
+          compression, not a unit error — do not reject either figure for it.
 
-        ## Group 6 — Datadog: monitors
-
-        Call `get_monitors` with `groupStates = ["alert", "warn"]` and
-        `tags = ["service:{{SERVICE}}"]`. Record every monitor returned with its name and state; if
-        the list is empty, write `None in ALERT or WARN`.
-
-        SLOs: the tool list you were given for this server is the authority on whether SLO data is
-        reachable — not any claim in this prompt, which was written against one version of one
-        server. If a tool for service level objectives is there, call it for `service:{{SERVICE}}`
-        and record each objective with its target and current attainment. If there is none, write
-        `NOT_COLLECTED: the configured Datadog MCP server exposes no SLO tool` and move on: do not
-        hunt for one, and do not offer monitors in their place — a monitor is not an objective.
+            """ + DatadogMcpPrompt.MONITORS_AND_SLOS + """
 
         ## Group 7 — Azure MCP: live resource configuration
 
@@ -408,11 +428,17 @@ public class MetricCollectionTaskPrompt {
           "mongo_collections": null,
           "mongo_documents": null,
           "mongo_data_growth_pct": null,
-          "largest_table_gb": null
+          "mongo_disk_used_gb": null,
+          "mongo_disk_used_pct": null,
+          "largest_table_gb": null,
+          "slo_count": null,
+          "slo_breached_count": null,
+          "slo_min_error_budget_remaining_pct": null
         }
         ```
 
         Latency values are milliseconds, lag values are messages, storage values are GB.
+        `slo_count` is `0` when the service has no SLO, and the two other SLO keys are then `null`.
         The JSON block is the last thing in the file.
             """;
     }

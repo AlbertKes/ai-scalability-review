@@ -23,10 +23,13 @@ public final class ValidationDataChecksPrompt {
         seconds, `from` = `to - 2419200`. Use the same window, and the same `.rollup(<aggregator>,
         86400)` suffix the report's query annotation shows, or your values will not be comparable.
 
-        `query_metrics` returns `series[].pointlist` as `[[<epoch_milliseconds>, <value>], ...]`.
-        Averages, peaks, worst days, per-week totals **and the timestamp of any peak** are all
-        arithmetic over that array — a report that marks one of them `NOT_COLLECTED` because the tool
-        "does not support" it is asserting something false, and Check 6 must fail it.
+            """ + DatadogMcpPrompt.RESPONSE_RULES + """
+
+        Averages, peaks, worst days, per-week totals **and the date of any peak** are all arithmetic
+        over `points` — a report that marks one of them `NOT_COLLECTED` because the tool "does not
+        support" it is asserting something false, and Check 6 must fail it. The one legitimate gap is
+        `date unresolved (<n> of <m> buckets returned)`, written when `pointCount` is short of the
+        expected bucket count: re-run the query and confirm the count before accepting it.
 
         ---
 
@@ -71,13 +74,12 @@ public final class ValidationDataChecksPrompt {
         ## Check 2 — Metric Numerical Fidelity
 
         Parse all metric values from the "Performance Metrics (Last 28 Days)" section of the report.
-        For each bullet with a `[Source: Datadog MCP → query_metrics("...")]` annotation,
-        extract the exact query string and re-run it now.
+        For each bullet with a `[Source: Datadog MCP → query-metrics("...")]` annotation,
+        extract the exact query string and re-run it now over the day-aligned window above.
 
-        Use `env:{{ENV}}` as the base filter and set `from=now-28d`, `to=now`. Datadog accepts
-        several metric expressions in one `query_metrics` call as a comma-separated query string —
-        group the re-checks below into one call per block rather than one call per metric, and never
-        run the same query twice in this session.
+        Datadog accepts several metric expressions in one `query-metrics` call as a comma-separated
+        query string — group the re-checks below into as few calls as the 8-series limit above
+        allows, and never run the same query twice in this session.
 
         **Metrics to re-verify** (run only the queries that are annotated in the report):
 
@@ -89,8 +91,14 @@ public final class ValidationDataChecksPrompt {
         - Memory avg/peak % of limit: `avg:kubernetes.memory.working_set{...}` / `max:...`
         - MySQL connections avg/peak: `avg:azure.dbformysql_flexibleservers.active_connections{name:{{MYSQL_HOST}}}` (SKIPPED if N/A)
         - MySQL slow queries: `sum:azure.dbformysql_flexibleservers.slow_queries{...}` (SKIPPED if N/A)
-        - Kafka consumer lag: `max:kafka.consumer_lag{...}` (SKIPPED if {{KAFKA_CONSUMER_GROUPS}} is N/A)
-        - MongoDB operation latency (SKIPPED if {{ATLAS_CLUSTER}} is N/A)
+        - Kafka consumer lag: average from `top(avg:kafka.consumer_lag{...} by {topic}.rollup(avg, 86400), 8, 'mean', 'desc')`,
+          peak from `top(max:kafka.consumer_lag{...} by {topic}.rollup(max, 86400), 8, 'max', 'desc')`,
+          one call each (SKIPPED if {{KAFKA_CONSUMER_GROUPS}} is N/A). An average computed from the
+          `rollup(max, …)` series is wrong by construction: FAIL it.
+        - MongoDB operation latency and storage (SKIPPED if {{ATLAS_CLUSTER}} is N/A)
+        - SLOs: re-run `list-slos` with `tagsQuery = "service:{{SERVICE}}"`. The set of SLO names must
+          match the report exactly. For each, re-run `slo-compliance-snapshot` (`historyDays = 28`):
+          attainment within ±0.1 percentage points and the same `status`; a different status is FAIL.
 
         **Comparison procedure**:
         1. Run the query.

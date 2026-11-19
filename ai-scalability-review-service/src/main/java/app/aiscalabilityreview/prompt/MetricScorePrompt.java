@@ -67,6 +67,11 @@ public class MetricScorePrompt {
         | **HTTP error rate — peak observed** | < 1 % | 1 % – 5 % | > 5 % |
         | **Container restarts — last 28 days** | 0 | 1 – 3 | > 3 |
         | **OOMKill events — last 28 days** | 0 | 1 | ≥ 2 |
+        | **SLO status — worst of the service's SLOs** (Datadog `status`) | All `compliant`, error budget ≥ 50 % | `compliant` with budget < 50 %, or `at-risk` | Any `breached` |
+        
+        > **Note on SLOs**: a service with no SLO tagged `service:<name>` omits the SLO row from
+        > scoring and says so in the findings — an undefined objective is a process gap, not a
+        > measured breach.
         
         ---
         
@@ -147,6 +152,12 @@ public class MetricScorePrompt {
         | **Data size — absolute (GB)** | < 100 GB | 100 – 500 GB | > 500 GB |
         | **Data size — 28-day growth** | < 10 % | 10 % – 50 % | > 50 % |
         | **Index size as a share of data size** | < 50 % | 50 % – 100 % | > 100 % |
+        | **Disk used — % of disk, fullest member** | < 60 % | 60 % – 80 % | > 80 % |
+        
+        > **Note on MongoDB storage**: data size, index size and disk are cluster-wide — the cluster is
+        > typically shared by many services. A YELLOW or RED here is a cluster capacity risk the
+        > service inherits; name the cluster in the finding rather than attributing the data to the
+        > service.
         
         ### Redis (if used)
         
