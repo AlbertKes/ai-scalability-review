@@ -29,7 +29,12 @@ public final class RecommendationSoundnessPrompt {
         Do not accept a recommendation because it sounds sensible. Each one is a factual claim about
         this codebase plus a proposed change; verify both.
 
-        **Procedure** — run all six tests below on each recommendation, in order:
+        **Out of scope for now.** Do not verify a recommendation about explicit outbound HTTP client
+        timeouts, or one about distributed locking for periodic background Kafka message handlers: list
+        it as a single `**[SKIPPED]**` finding ("out of scope for now"), Dimension `General`, and give it
+        no other test. It must not turn the check into a FAIL.
+
+        **Procedure** — run all the tests below on each recommendation, in order:
 
         **8a — Premise.** Re-verify the **Finding** against the primary source, not against the
         report. A finding annotated `[Source: context → code-context.md]` is *not* verified by
@@ -47,6 +52,11 @@ public final class RecommendationSoundnessPrompt {
         The roots above are where to look first, not a boundary — read anything under
         `{{APP_REPO_PATH}}` the report cites.
 
+        A path the report cites that does not exist under these roots (the earlier stage that wrote the
+        recommendation could not see the source and may have guessed the path, or taken it from another
+        language's convention) is **WARNING — cited path not found**, naming the path; judge the
+        premise from what you can actually read, and do not FAIL a recommendation for the path alone.
+
         If a primary source cannot be read at all, say so and mark that recommendation
         **WARNING — primary source unreadable**, naming the path and the error. Never record PASS
         for a recommendation you were unable to check: a check that silently passes because it
@@ -59,6 +69,12 @@ public final class RecommendationSoundnessPrompt {
         that can be built on a missing metric is "collect it" — a recommendation that instead asserts
         a risk, or prescribes a change sized to the number it does not have, is asserting something
         it cannot know.
+
+        The reverse mistake counts too: a metric the report marks `NOT_COLLECTED` that is in fact
+        present in `metrics-snapshot.json`, or that you can query yourself, is a wrong judgement by the
+        report → **WARNING — metric was collected**, quoting the value. Storage figures (`storage_used`,
+        data size, disk) are the usual case: a figure that is large or small relative to the
+        provisioned size is still a collected figure, not a missing one.
 
         **8c — Already done.** Check whether the proposed **Action** is already implemented. Search
         the repository for the mechanism the action asks for — the config call, the annotation, the
@@ -81,11 +97,35 @@ public final class RecommendationSoundnessPrompt {
         the report guesses at.
 
         **8f — Scope.** Confirm the metric that motivates the recommendation is actually scoped to
-        this service. A shared-resource metric — `azure.dbformysql_flexibleservers.*` is per
-        **server**, not per application, and one flexible server hosts every service in the domain —
-        describes all of its tenants at once. Attributing it to this service alone, or sizing this
-        service's change by it, → **WARNING** at minimum; **FAIL** if the recommendation's whole
-        premise is that this service caused the number.
+        this service. A shared-resource metric — `azure.dbformysql_flexibleservers.*` (replication lag,
+        server storage, server CPU) is per **server**, and `mongodb.atlas.*` at cluster level is per
+        **cluster**; one server or cluster hosts every service in the domain — describes all of its
+        tenants at once. Such a metric is a **reminder for the team that owns the resource**, not a
+        finding against this service. If a recommendation attributes it to this service alone, or sizes
+        this service's change by it, → **WARNING — shared-resource metric** (never FAIL on this
+        ground alone, and never count it as evidence that this service is the cause). A
+        per-database or per-table figure for a database this service owns is in scope.
+
+        **8g — Framework fit.** This is a **core-ng** application (`core.framework.*`, `Module`,
+        `HTTPClient`, `WebService`, `MessagePublisher`, `bind(...)`), not Spring. A recommendation that
+        names a Spring mechanism — `@Transactional`, `@Async`, `@Bean`, `application.yml`,
+        `RestTemplate`, Resilience4j / Hystrix circuit breakers, Spring Boot actuator — as something
+        to add or change does not apply → **WARNING — wrong framework idiom**, and say what the
+        core-ng equivalent would be (e.g. `HTTPClient` builder timeouts, `ExecutorConfig` /
+        `executor().add`, `kafka().poolSize`, `db().batchSize`). Do not FAIL it if the underlying
+        intent is sound. Ignore circuit-breaker recommendations altogether: core-ng has none and
+        they are out of scope for this review.
+
+        **8h — Effective configuration.** A value read from `app.properties` or a code default is only
+        the *default*. core-ng overrides any property from an environment variable (the key
+        upper-cased, dots → underscores, e.g. `APP_ENABLEKAFKACONSUMER`) and from
+        `conf/<env>/resources`, and the K8s manifests in `{{INFRA_REPO_PATH}}` set those variables per
+        environment. Before accepting a premise that rests on a configured value (a pool size, a
+        timeout, a flag, a poll interval), read the deployment manifest for this environment and
+        confirm the value in force. A premise built on the default that the manifest overrides →
+        **FAIL** if the override flips the conclusion, otherwise **WARNING**, naming the manifest line.
+
+        Tag each of these findings with the `Dimension` the recommendation is about.
 
         Finally, for each recommendation that survives, check **proportionality**: the
         `(High Priority)` / `(Medium Priority)` / `(Low Priority)` marker must match the strength of
@@ -94,7 +134,7 @@ public final class RecommendationSoundnessPrompt {
 
         **Report one finding per recommendation**, naming it by number and title, with `Reported:` =
         the finding as the report states it and `Actual:` = what the primary source says, sourced. A
-        recommendation that passes all six tests is a **PASS** finding — still list it, so the reader
+        recommendation that passes all the tests is a **PASS** finding — still list it, so the reader
         can tell verified advice from unchecked advice.
 
         A recommendation that is factually false or already implemented is worse than a missing one,

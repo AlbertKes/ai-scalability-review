@@ -57,6 +57,12 @@ public class GeminiCliService {
     private static final int ERROR_OUTPUT_LIMIT = 4000;
     private static final int VERSION_TIMEOUT_SECONDS = 15;
 
+    /**
+     * Wall-clock ceiling of every AI stage. The slowest stage (code analysis of a large service) has
+     * run 22 minutes, and a stage that is genuinely stuck is better stopped than waited on for an hour.
+     */
+    public static final int STAGE_TIMEOUT_MINUTES = 30;
+
     private static final String GOOGLE_API_KEY = "GOOGLE_API_KEY";
     private static final String GEMINI_API_KEY = "GEMINI_API_KEY";
     private static final String USE_VERTEX_AI = "GOOGLE_GENAI_USE_VERTEXAI";
@@ -111,6 +117,7 @@ public class GeminiCliService {
         String sessionId = UUID.randomUUID().toString();
         try {
             Files.writeString(promptFile, request.prompt());
+            request.thinking().writeSettings(workDir, request.model());
             logger.info("Running Gemini CLI: model={}, promptChars={}, includeDirs={}, mcpServers={}, timeoutMinutes={}",
                 request.model(), request.prompt().length(), request.includeDirs(), request.allowedMcpServers(), request.timeoutMinutes());
 
@@ -123,12 +130,7 @@ public class GeminiCliService {
             long startMs = System.currentTimeMillis();
             Process process = pb.start();
             if (context.processListener() != null) context.processListener().accept(process);
-            byte[] stdoutBytes = process.getInputStream().readAllBytes();
-            boolean finished = process.waitFor(request.timeoutMinutes(), TimeUnit.MINUTES);
-            if (!finished) {
-                ProcessRunner.destroyTree(process);
-                throw new IllegalStateException("Gemini CLI timed out after " + request.timeoutMinutes() + " minutes");
-            }
+            byte[] stdoutBytes = GeminiProcessOutput.await(process, request.timeoutMinutes(), TimeUnit.MINUTES);
             long durationMs = System.currentTimeMillis() - startMs;
 
             String stdout = new String(stdoutBytes, StandardCharsets.UTF_8).trim();
@@ -139,6 +141,9 @@ public class GeminiCliService {
             }
 
             GeminiRunResult result = parseResult(request.model(), stdout, durationMs, sessionId);
+            if (!result.model().equals(request.model())) {
+                logger.info("Gemini CLI ran {} for the requested {}", result.model(), request.model());
+            }
             logger.info("Gemini CLI completed: model={}, durationMs={}, inputTokens={}, outputTokens={}, cachedTokens={}, apiRequests={}, toolCalls={}, mcpToolCalls={}, responseChars={}",
                 result.model(), result.durationMs(), result.inputTokens(), result.outputTokens(), result.cachedTokens(),
                 result.apiRequests(), result.toolCalls(), result.mcpToolCalls(), result.response().length());
@@ -146,6 +151,8 @@ public class GeminiCliService {
         } finally {
             deleteQuietly(promptFile);
             if (!keepLog) deleteQuietly(stderrFile);
+            deleteQuietly(workDir.resolve(".gemini").resolve("settings.json"));
+            deleteQuietly(workDir.resolve(".gemini"));
             deleteQuietly(workDir);
         }
     }
@@ -240,7 +247,26 @@ public class GeminiCliService {
         String response = output.response == null ? "" : output.response.trim();
         String resolvedSessionId = output.sessionId == null ? sessionId : output.sessionId;
         String rawStats = output.stats == null ? null : JSON.toJSON(output.stats);
-        return new GeminiRunResult(model, response, durationMs, tokens, calls, resolvedSessionId, rawStats);
+        return new GeminiRunResult(ranModel(model, output), response, durationMs, tokens, calls, resolvedSessionId, rawStats);
+    }
+
+    /**
+     * The model the CLI actually used, which can differ from the one requested: it promotes a model
+     * to a newer one the account can reach. With several models in the stats (a routed side call)
+     * the one that handled the most tokens is the one the run was about.
+     */
+    private String ranModel(String requested, GeminiCliOutput output) {
+        if (output.stats == null || output.stats.models == null) return requested;
+        String ran = null;
+        long most = -1;
+        for (Map.Entry<String, ModelStats> entry : output.stats.models.entrySet()) {
+            long total = entry.getValue() == null || entry.getValue().tokens == null ? 0 : value(entry.getValue().tokens.total);
+            if (total > most && entry.getKey() != null) {
+                ran = entry.getKey();
+                most = total;
+            }
+        }
+        return ran == null ? requested : ran;
     }
 
     private TokenUsage tokenUsage(GeminiCliOutput output) {
@@ -344,12 +370,17 @@ public class GeminiCliService {
      * @param includeDirs       directories the prompt may read via @file
      * @param allowedMcpServers MCP servers this stage may use, or {@link #MCP_DISABLED} for none
      * @param timeoutMinutes    wall-clock ceiling for this stage
+     * @param thinking          how much the model may think, see {@link GeminiThinking}
      */
     public record GeminiRunRequest(String prompt,
                                    String model,
                                    List<String> includeDirs,
                                    List<String> allowedMcpServers,
-                                   int timeoutMinutes) {
+                                   int timeoutMinutes,
+                                   GeminiThinking thinking) {
+        public GeminiRunRequest(String prompt, String model, List<String> includeDirs, List<String> allowedMcpServers, int timeoutMinutes) {
+            this(prompt, model, includeDirs, allowedMcpServers, timeoutMinutes, GeminiThinking.LOW);
+        }
     }
 
     /**

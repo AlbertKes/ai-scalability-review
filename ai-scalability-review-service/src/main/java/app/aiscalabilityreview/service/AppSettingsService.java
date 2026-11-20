@@ -21,7 +21,8 @@ import java.util.List;
 public class AppSettingsService {
     public static final String PRICE_TABLE_UNCONFIGURED = "unconfigured";
     private static final List<String> SEEDED_MODELS = List.of(
-        "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
+        "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.1-flash-lite",
+        "gemini-3.1-pro-preview",
         "gemini-3-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash");
 
     @Inject

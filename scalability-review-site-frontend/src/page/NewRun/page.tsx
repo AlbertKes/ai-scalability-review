@@ -20,6 +20,7 @@ const SECTION_FIELDS: Record<string, string[]> = {
     "mysql_host",
     "mysql_db",
     "atlas_cluster",
+    "atlas_database",
     "kafka_consumer_groups",
     "azure_resource_group",
     "azure_subscription_id",
@@ -266,6 +267,14 @@ export default function NewRun() {
                   </Field>
                   <Field name="atlas_cluster" label="Atlas cluster" issues={issues}>
                     <Input value={request.atlas_cluster ?? ""} onChange={e => set({atlas_cluster: e.target.value})} />
+                  </Field>
+                  <Field
+                    name="atlas_database"
+                    label="Atlas database"
+                    hint="Optional. The database this service owns (Datadog databasename tag); enables the 50 GB database-size check."
+                    issues={issues}
+                  >
+                    <Input value={request.atlas_database ?? ""} onChange={e => set({atlas_database: e.target.value})} />
                   </Field>
                   <Field
                     name="kafka_consumer_groups"

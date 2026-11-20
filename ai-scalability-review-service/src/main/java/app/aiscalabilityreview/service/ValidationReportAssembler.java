@@ -2,6 +2,7 @@ package app.aiscalabilityreview.service;
 
 import app.aiscalabilityreview.prompt.ValidationChecks;
 import app.aiscalabilityreview.prompt.ValidationChecks.Check;
+import app.aiscalabilityreview.prompt.ValidationChecks.Dimension;
 import core.framework.util.Strings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,10 +13,13 @@ import java.nio.file.Path;
 import java.time.format.DateTimeFormatter;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -29,6 +33,12 @@ import java.util.stream.Collectors;
  * removes a whole class of defect the old report could carry: a summary row that disagreed with its
  * own section, an issue count that did not match the findings under it, or a PASS verdict over a
  * section containing a FAIL.
+ *
+ * <p>The verdict counts <em>dimensions</em>, not findings. A FAIL anywhere used to fail the whole
+ * report, and every real run had at least one, so the verdict carried no information. A finding now
+ * belongs to one of the review's five scoring dimensions, and the report FAILs only when three or
+ * more of them hold a FAIL; two is a yellow ({@link #VERDICT_CONDITIONAL_PASS}), one or none is green
+ * ({@link #VERDICT_PASS}). Every FAIL and WARNING is still listed in full whatever the verdict says.
  *
  * <p>A group whose session failed leaves no partial. Its checks are then reported as not run, and
  * the verdict is held below a clean PASS — a check that did not happen must never read as one that
@@ -49,6 +59,11 @@ public class ValidationReportAssembler {
         "(?m)^##\\s*Check\\s*(\\d+)\\s*[—–-]\\s*([^:\\n]*?)\\s*:\\s*\\**\\s*(PASS|FAIL|WARNING|SKIPPED)\\b.*$");
     private static final Pattern FINDING_PATTERN = Pattern.compile(
         "(?m)^\\*\\*\\[(PASS|FAIL|WARNING|SKIPPED)]\\*\\*\\s*(.*)$");
+    private static final Pattern DIMENSION_PATTERN = Pattern.compile(
+        "(?mi)^\\s*[-*]?\\s*Dimension\\s*:\\s*`?([A-Za-z][A-Za-z &/]*)`?\\s*$");
+    /** Failed dimensions at which the report as a whole FAILs, and at which it turns yellow. */
+    private static final int FAIL_DIMENSIONS_FOR_FAIL = 3;
+    private static final int FAIL_DIMENSIONS_FOR_YELLOW = 2;
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
     private static final String HEADER_TEMPLATE = """
@@ -68,12 +83,13 @@ public class ValidationReportAssembler {
     private static final String FOOTER = """
 
         ---
-        *Validation performed by three independent sessions — one re-querying Datadog MCP and Azure MCP
-        and the infra repository, one re-checking the report against itself, one re-verifying each
+        *Validation performed by three independent sessions — one comparing the report with the collected
+        Datadog and Azure data and the infra repository, one re-checking the report against itself, one re-verifying each
         recommendation against the application source — against the claims in the original report.*
-        *Metric tolerances applied: ±20% for 28-day averages, ±30% for peaks (rolling window drift).*
-        *Config tolerances: exact match for static config; ±10 GB or ±10% for dynamic storage values.*
-        *The summary table and the verdict above are computed from the findings, not asserted beside them.*
+        *Metric values are compared with the figures the pipeline collected over the same fixed window: equal after rounding.*
+        *Config tolerances: exact match for static config.*
+        *The summary table and the verdict above are computed from the findings, not asserted beside them:
+        three or more failed dimensions FAIL, two are a yellow, one or none is green.*
         """;
 
     private final Logger logger = LoggerFactory.getLogger(ValidationReportAssembler.class);
@@ -152,8 +168,11 @@ public class ValidationReportAssembler {
             sb.append("---\n\n").append(checkSection(check, sections.get(check.number()))).append("\n\n");
         }
 
+        Set<Dimension> failedDimensions = EnumSet.noneOf(Dimension.class);
+        fails.stream().map(Finding::dimension).filter(Objects::nonNull).forEach(failedDimensions::add);
         sb.append("---\n\n## Overall Validation Verdict: ")
-            .append(verdict(fails.isEmpty(), warnings.isEmpty(), missing.isEmpty())).append("\n\n");
+            .append(verdict(failedDimensions.size(), missing.isEmpty())).append("\n\n");
+        appendDimensions(sb, fails, warnings, failedDimensions);
         appendList(sb, "### Critical Issues", fails);
         appendList(sb, "### Warnings", warnings);
         appendNotes(sb, missing);
@@ -182,22 +201,67 @@ public class ValidationReportAssembler {
         return ValidationChecks.header(check.number(), section.status()) + "\n\n" + section.body();
     }
 
-    /** FAIL beats WARNING beats PASS, and a group that did not run can never leave a clean PASS. */
-    private String verdict(boolean noFails, boolean noWarnings, boolean nothingMissing) {
-        if (!noFails) return VERDICT_FAIL;
-        if (noWarnings && nothingMissing) return VERDICT_PASS;
-        return VERDICT_CONDITIONAL_PASS;
+    /**
+     * Three or more failed dimensions FAIL, two are yellow, one or none is green — except that a
+     * group which did not run can never leave a clean PASS, because a check that did not happen must
+     * not read as one that passed.
+     */
+    private String verdict(int failedDimensions, boolean nothingMissing) {
+        if (failedDimensions >= FAIL_DIMENSIONS_FOR_FAIL) return VERDICT_FAIL;
+        if (failedDimensions >= FAIL_DIMENSIONS_FOR_YELLOW || !nothingMissing) return VERDICT_CONDITIONAL_PASS;
+        return VERDICT_PASS;
+    }
+
+    /** The five dimensions with their FAIL and WARNING counts, so the verdict can be audited. */
+    private void appendDimensions(StringBuilder sb, List<Finding> fails, List<Finding> warnings, Set<Dimension> failed) {
+        sb.append("### Dimension Results\n\n**").append(failed.size()).append(" of ").append(Dimension.values().length)
+            .append(" dimensions failed** — ").append(FAIL_DIMENSIONS_FOR_FAIL).append("+ is FAIL, ")
+            .append(FAIL_DIMENSIONS_FOR_YELLOW).append(" is CONDITIONAL PASS (yellow), 0–1 is PASS (green).\n\n"
+                + "| Dimension | Status | FAIL | WARNING |\n|---|---|---|---|\n");
+        for (Dimension dimension : Dimension.values()) {
+            long failCount = fails.stream().filter(finding -> finding.dimension() == dimension).count();
+            long warningCount = warnings.stream().filter(finding -> finding.dimension() == dimension).count();
+            String status = failCount > 0 ? STATUS_FAIL : warningCount > 0 ? STATUS_WARNING : STATUS_PASS;
+            sb.append("| ").append(dimension.label()).append(" | ").append(status).append(" | ")
+                .append(failCount).append(" | ").append(warningCount).append(" |\n");
+        }
+        long unplaced = fails.stream().filter(finding -> finding.dimension() == null).count();
+        if (unplaced > 0) {
+            sb.append('\n').append(unplaced).append(" FAIL finding(s) belong to no single dimension (format, scoring math, "
+                + "projection) and do not count toward the verdict; they are listed below.\n");
+        }
+        sb.append('\n');
     }
 
     private List<Finding> findings(int checkNumber, String body) {
         List<Finding> findings = new ArrayList<>();
         Matcher matcher = FINDING_PATTERN.matcher(body);
+        List<FindingHead> heads = new ArrayList<>();
         while (matcher.find()) {
-            String status = matcher.group(1);
-            if (STATUS_PASS.equals(status) || "SKIPPED".equals(status)) continue;
-            findings.add(new Finding(checkNumber, status, matcher.group(2).strip()));
+            heads.add(new FindingHead(matcher.group(1), matcher.start(), matcher.end(), matcher.group(2).strip()));
+        }
+        for (int i = 0; i < heads.size(); i++) {
+            FindingHead head = heads.get(i);
+            if (STATUS_PASS.equals(head.status()) || "SKIPPED".equals(head.status())) continue;
+            int end = i + 1 < heads.size() ? heads.get(i + 1).start() : body.length();
+            findings.add(new Finding(checkNumber, head.status(), head.title(), dimension(head.title(), body.substring(head.bodyStart(), end))));
         }
         return findings;
+    }
+
+    /**
+     * The tag the model wrote, else the dimension its wording points at. A finding is left unplaced
+     * only when the model explicitly called it {@code General}, because an unplaced FAIL does not
+     * count toward the verdict and must not happen by accident.
+     */
+    private Dimension dimension(String title, String block) {
+        Matcher tag = DIMENSION_PATTERN.matcher(block);
+        if (tag.find()) {
+            Dimension tagged = Dimension.fromTag(tag.group(1));
+            if (tagged != null) return tagged;
+            if (tag.group(1).strip().toLowerCase(Locale.ROOT).startsWith("general")) return null;
+        }
+        return Dimension.infer(title, block);
     }
 
     private void appendList(StringBuilder sb, String heading, List<Finding> findings) {
@@ -241,10 +305,13 @@ public class ValidationReportAssembler {
     private record Section(int number, String status, String body) {
     }
 
-    /** One parsed check heading and where its body begins and the next heading starts. */
+    /** One finding line: its status and title, and where the finding's own lines begin. */
+    private record FindingHead(String status, int start, int bodyStart, String title) {
+    }
+
     private record Heading(int number, String status, int start, int bodyStart) {
     }
 
-    private record Finding(int checkNumber, String status, String title) {
+    private record Finding(int checkNumber, String status, String title, Dimension dimension) {
     }
 }

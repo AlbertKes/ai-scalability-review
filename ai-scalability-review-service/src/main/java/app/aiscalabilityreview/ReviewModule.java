@@ -30,6 +30,7 @@ import app.aiscalabilityreview.service.AzureService;
 import app.aiscalabilityreview.service.ConfluenceService;
 import app.aiscalabilityreview.service.CostService;
 import app.aiscalabilityreview.service.DatadogMetricProbe;
+import app.aiscalabilityreview.service.DatadogMetricsCollector;
 import app.aiscalabilityreview.service.DatadogService;
 import app.aiscalabilityreview.service.GeminiCliService;
 import app.aiscalabilityreview.service.FindingFeedbackService;
@@ -95,6 +96,7 @@ public class ReviewModule extends Module {
         bind(NotificationService.class);
         bind(GitRepoInspector.class);
         bind(DatadogMetricProbe.class);
+        bind(DatadogMetricsCollector.class);
         bind(PreflightService.class);
         bind(ArtifactService.class);
         bind(ReviewJobQueryService.class);

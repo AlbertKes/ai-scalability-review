@@ -1,10 +1,12 @@
 package app.aiscalabilityreview.prompt;
 
 /**
- * Checks 1, 2 and 6 — the validation checks that re-query the live sources.
+ * Checks 1, 2 and 6 — the validation checks that compare the report with its collected inputs.
  *
- * <p>Held apart from the other two groups because this is the only one that needs MCP servers, and
- * it is the only one whose cost is dominated by tool round-trips rather than by context. It is given
+ * <p>This group used to re-query Datadog and Azure through MCP servers and compare the answers with the
+ * report. That cost eight minutes and produced its own errors (a second model's arithmetic over a
+ * second query, with a window or an aggregator that differed from the first), so it now compares the
+ * report with what the pipeline collected: the Datadog figures are computed in code, once. It is given
  * the infra repository (Check 1a re-reads the manifests the report cites) but not the application
  * repository, which only Check 8 needs, and neither the scoring thresholds nor the report format
  * spec, which only Checks 4 and 7 need.
@@ -17,131 +19,81 @@ public final class ValidationDataChecksPrompt {
 
     static {
         CONTENT = """
-        ## Re-querying Datadog
+        ## What this session compares
 
-        The report's 28-day figures come from a day-aligned window: `to` = today's 00:00 UTC in epoch
-        seconds, `from` = `to - 2419200`. Use the same window, and the same `.rollup(<aggregator>,
-        86400)` suffix the report's query annotation shows, or your values will not be comparable.
+        No live source is queried in this run. The metrics the report cites were collected by the
+        pipeline into `{{METRICS_PATH}}` (Datadog values read over the REST API, computed in code, over
+        one fixed day-aligned 28-day window), and the Azure state into `{{AZURE_LIVE_PATH}}`. Those two
+        files are the ground truth for Checks 2 and 6: the report is right when it says what they say.
+        Read each once, fully, with the read tool, then compare. Do not call any other tool except the
+        one that writes your output file and, for Check 1a, the read tool on a cited manifest.
 
-            """ + DatadogMcpPrompt.RESPONSE_RULES + """
+        Be economical: do not restate a finding that matches. Report every FAIL, WARNING and SKIPPED
+        finding in the full format, and collapse everything that passes into **one** line per check:
 
-        Averages, peaks, worst days, per-week totals **and the date of any peak** are all arithmetic
-        over `points` — a report that marks one of them `NOT_COLLECTED` because the tool "does not
-        support" it is asserting something false, and Check 6 must fail it. The one legitimate gap is
-        `date unresolved (<n> of <m> buckets returned)`, written when `pointCount` is short of the
-        expected bucket count: re-run the query and confirm the count before accepting it.
+        `**[PASS]** <n> items verified: <comma-separated names>` followed by `- Dimension: General`.
 
         ---
 
         ## Check 1 — Config Accuracy
 
         Parse every row of the "Infrastructure Configuration" table from {{REPORT_FILE}}.
-        For each row, identify its `[Source: ...]` annotation and re-fetch the value from that source.
+        For each row, identify its `[Source: ...]` annotation and compare the value with that source.
 
         ### 1a — Kubernetes / k8s-gitops values (annotated `[Source: code → ...]`)
 
-        Re-read the exact files identified in the source annotations.
+        Re-read the exact files named in the annotations and compare the report's claim against the
+        file content: CPU and memory requests and limits, HPA minReplicas, maxReplicas, target metric
+        and threshold, and the AKS node pool SKU and min/max nodes (from Terraform, if annotated).
+        Exact match required.
 
-        For each file-sourced config value in the report, compare the report's claim against the
-        file content. Verify:
-        - CPU requests and limits
-        - Memory requests and limits
-        - HPA minReplicas, maxReplicas, target metric, and threshold
-        - AKS node pool SKU and min/max nodes (from Terraform, if annotated)
+        ### 1b — Azure values (annotated `[Source: Azure MCP → ...]`)
 
-        **Tolerance for static config**: exact match required — no tolerance for CPU/memory
-        requests, limits, or HPA thresholds.
-
-        ### 1b — Azure MCP live config values (annotated `[Source: Azure MCP → ...]`)
-
-        For each value in the report annotated as `[Source: Azure MCP → <tool>(<args>)]`,
-        re-run the identical tool call now. If {{MYSQL_HOST}} is N/A, skip 1b entirely (SKIPPED).
-
-        Re-run each of the following that appears in the report:
-        - `[Source: Azure MCP → get_mysql_flexible_server(name={{MYSQL_HOST}})]`
-        - `[Source: Azure MCP → list_mysql_flexible_server_configurations(server_name={{MYSQL_HOST}})]`
-        - `[Source: Azure MCP → list_mysql_flexible_server_replicas(server_name={{MYSQL_HOST}})]`
-        - `[Source: Azure MCP → get_aks_node_pools(cluster=<name>, resource_group=<rg>)]`
-
-        Compare the reported property value vs. the value returned now.
-
-        **Tolerance**:
-        - Static config (SKU, vCPU count, HA mode, max_connections): exact match required
-        - Storage used (GB): ±10 GB or ±10% is acceptable (data grows between runs)
+        Compare each such value with `{{AZURE_LIVE_PATH}}`, which holds what the Azure MCP server
+        returned during this run. If {{MYSQL_HOST}} is N/A, skip the MySQL rows (SKIPPED). Static
+        configuration (SKU, vCPU count, max_connections, node pools) must match exactly. Check the
+        **primary** server only: ignore replicas and any secondary attribute (high-availability mode,
+        standby zone, storage auto-grow or IO scaling flags), whether or not the file lists them. A
+        primary value the report states that the file does not contain is SKIPPED, not a WARNING.
 
         ---
 
         ## Check 2 — Metric Numerical Fidelity
 
-        Parse all metric values from the "Performance Metrics (Last 28 Days)" section of the report.
-        For each bullet with a `[Source: Datadog MCP → query-metrics("...")]` annotation,
-        extract the exact query string and re-run it now over the day-aligned window above.
+        Parse the metric values of the report's "Performance Metrics (Last 28 Days)" section and compare
+        each with the same metric in `{{METRICS_PATH}}` (its sections 1–7 and the JSON snapshot).
 
-        Datadog accepts several metric expressions in one `query-metrics` call as a comma-separated
-        query string — group the re-checks below into as few calls as the 8-series limit above
-        allows, and never run the same query twice in this session.
-
-        **Metrics to re-verify** (run only the queries that are annotated in the report):
-
-        - Avg RPS: `sum:trace.undertow_http.request.hits{env:{{ENV}},service:{{SERVICE}}}.as_count()`
-        - P50/P95/P99 latency: `p50:trace.undertow_http.request{...}`, `p95:...`, `p99:...`
-        - HTTP error rate: `sum:trace.undertow_http.request.errors{...} / sum:trace.undertow_http.request.hits{...}`
-        - Container restarts: `sum:kubernetes.containers.restarts{env:{{ENV}},service:{{SERVICE}}}`
-        - CPU avg/peak % of limit: `avg:kubernetes.cpu.usage.total{...}` / `max:...`
-        - Memory avg/peak % of limit: `avg:kubernetes.memory.working_set{...}` / `max:...`
-        - MySQL connections avg/peak: `avg:azure.dbformysql_flexibleservers.active_connections{name:{{MYSQL_HOST}}}` (SKIPPED if N/A)
-        - MySQL slow queries: `sum:azure.dbformysql_flexibleservers.slow_queries{...}` (SKIPPED if N/A)
-        - Kafka consumer lag: average from `top(avg:kafka.consumer_lag{...} by {topic}.rollup(avg, 86400), 8, 'mean', 'desc')`,
-          peak from `top(max:kafka.consumer_lag{...} by {topic}.rollup(max, 86400), 8, 'max', 'desc')`,
-          one call each (SKIPPED if {{KAFKA_CONSUMER_GROUPS}} is N/A). An average computed from the
-          `rollup(max, …)` series is wrong by construction: FAIL it.
-        - MongoDB operation latency and storage (SKIPPED if {{ATLAS_CLUSTER}} is N/A)
-        - SLOs: re-run `list-slos` with `tagsQuery = "service:{{SERVICE}}"`. The set of SLO names must
-          match the report exactly. For each, re-run `slo-compliance-snapshot` (`historyDays = 28`):
-          attainment within ±0.1 percentage points and the same `status`; a different status is FAIL.
-
-        **Comparison procedure**:
-        1. Run the query.
-        2. Compute the same summary statistic as the report (avg, max, p99, etc.).
-        3. Compare to the reported value.
-
-        **Tolerance**:
-        - Average metrics (avg RPS, P50, avg CPU, avg connections): ±20% acceptable
-        - Peak metrics (max RPS, P99 peak, peak CPU): ±30% acceptable
-        - Count / sum metrics (restarts, slow queries total): ±30% acceptable
-        - Values differing by >50% or directionally reversed (report says LOW, data shows HIGH): FAIL
-        - If report date is >30 days before today: mark all metric re-checks as SKIPPED (temporal drift
-          makes exact comparison meaningless); retrieve current values for informational context only.
+        - The value must be the one the file holds, in the same unit. A unit conversion the report
+          applies (nanocores to cores, bytes to GB, seconds to milliseconds, a percentage of a limit)
+          is checked by redoing the conversion from the file's value.
+        - **Tolerance**: equal after rounding to the digits the report shows. A difference larger than
+          1% is a FAIL; a difference of rounding only is a PASS.
+        - A metric the report states that the file does not contain is a FAIL ("not in the collected
+          data"). A metric the file holds that the report leaves out is not an issue.
+        - The date of a peak must be the date the file gives, and inside the file's lookback window.
+        - SLOs: the set of SLO names, each attainment, error budget and status must equal the file's.
+        - Do not judge whether a value is plausible, high or low: that is not this check.
 
         ---
 
         ## Check 6 — NOT_COLLECTED Authenticity
 
-        Identify every `NOT_COLLECTED: <reason>` instance in {{REPORT_FILE}}.
-        For each one, determine whether the stated inability to collect was legitimate.
+        Identify every `NOT_COLLECTED: <reason>` instance in {{REPORT_FILE}}, and compare with section
+        10 "Collection Gaps" of `{{METRICS_PATH}}`.
 
-        **Procedure**:
-        1. Parse the NOT_COLLECTED item: metric or config name, reason stated, and source attempted.
-        2. Attempt to query the same source now using the same tool and parameters.
-        3. Evaluate:
-           - Query fails for the same reason as stated → **PASS** (NOT_COLLECTED was legitimate)
-           - Query succeeds and returns data → **FAIL** (NOT_COLLECTED was a false assertion; data exists)
-           - Query fails for a different reason → **WARNING** (reason may be stale; claim is uncertain)
-           - Metric omitted but the service config indicates it applies (e.g., MySQL metrics omitted
-             when `{{MYSQL_HOST}}` is not N/A) → **FAIL** (metric was required but absent without justification)
+        - A `NOT_COLLECTED` in the report whose metric is a listed gap, or is marked `NOT_COLLECTED` in
+          the file's body, is **PASS** (it is real).
+        - A `NOT_COLLECTED` in the report for a metric the file holds a value for is a **FAIL** (a
+          false assertion: the data exists).
+        - A metric the service's configuration says applies (MySQL when {{MYSQL_HOST}} is not N/A, Kafka
+          when {{KAFKA_CONSUMER_GROUPS}} is not N/A, MongoDB when {{ATLAS_CLUSTER}} is not N/A) that is
+          missing from the report without a `NOT_COLLECTED` and without a value is a **FAIL**.
+        - A gap in the file that the report does not mention is a **WARNING**.
+        - A metric of a datastore the service does not use is a legitimate omission (SKIPPED).
 
-        **Legitimate omissions** (mark SKIPPED, not FAIL):
-        - Kafka metrics when `{{KAFKA_CONSUMER_GROUPS}}` is N/A
-        - MySQL metrics when `{{MYSQL_HOST}}` is N/A
-        - MongoDB metrics when `{{ATLAS_CLUSTER}}` is N/A
-
-        **Never legitimate** (always FAIL, no re-query needed): a reason that claims the derivation
-        itself was impossible rather than the query — "complex data derivation", "beyond current
-        capabilities", "does not support timestamp extraction", or any variant. The data was returned;
-        only the arithmetic was skipped.
-
-        **Temporal note**: If the report is >30 days old and a metric is now available that may not
-        have been at generation time, mark WARNING rather than FAIL.
+        **Never legitimate** (always FAIL): a reason that claims the derivation itself was impossible
+        — "complex data derivation", "beyond current capabilities", "does not support timestamp
+        extraction", or any variant. The data was collected; only the arithmetic was skipped.
 
         ---
             """;
@@ -153,6 +105,12 @@ public final class ValidationDataChecksPrompt {
 
         **Review report to validate**:
         @{{REPORT_FILE}}
+
+        **Collected metrics** (ground truth for Checks 2 and 6):
+        @{{METRICS_PATH}}
+
+        **Collected Azure state** (ground truth for Check 1b):
+        @{{AZURE_LIVE_PATH}}
 
         **Infra repository root** (for re-reading the source-annotated config files of Check 1a):
         Local path: `{{INFRA_REPO_PATH}}`

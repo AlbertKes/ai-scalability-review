@@ -30,6 +30,8 @@ public final class LocalReviewOutputPaths {
     public static final String INFRA_CONTEXT = "infra-context.md";
     public static final String METRICS = "metrics.md";
     public static final String MYSQL_TABLES = "mysql-tables.md";
+    /** What the Azure session collected; stage 3 merges it into {@link #METRICS}. */
+    public static final String AZURE_LIVE = "azure-live.md";
     public static final String REPORT_SNAPSHOT = "report-snapshot.json";
     /** One per validation session; the merged `<date>-validation.md` is assembled from the three. */
     public static final String VALIDATION_STATIC = "validation-static.md";

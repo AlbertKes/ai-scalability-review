@@ -246,6 +246,7 @@ public class ReviewReportService {
             .replace("{{MYSQL_HOST}}", "N/A")
             .replace("{{MYSQL_DB}}", "N/A")
             .replace("{{ATLAS_CLUSTER}}", "N/A")
+            .replace("{{ATLAS_DATABASE}}", "N/A")
             .replace("{{KAFKA_CONSUMER_GROUPS}}", "N/A")
             .replace("{{MYSQL_TABLES_PATH}}", "N/A")
             .replace("{{INFRA_REPO_PATH}}", "not available in this pipeline")

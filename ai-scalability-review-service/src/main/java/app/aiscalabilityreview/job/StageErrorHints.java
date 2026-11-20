@@ -28,7 +28,7 @@ public final class StageErrorHints {
             return "No Application Default Credentials. Run: gcloud auth application-default login";
         }
         if (message.contains("expected record, received array")) {
-            return "This is the Gemini CLI 0.46 MySQL MCP incompatibility: it JSON-parses the first text block "
+            return "This is the known Gemini CLI MySQL MCP incompatibility (first seen on 0.46): it JSON-parses the first text block "
                 + "into structuredContent, which the MCP SDK validates as an object, and the MySQL server returns "
                 + "rows as an array. Table sizes are collected over JDBC in stage 2 instead; no SQL shape avoids it.";
         }

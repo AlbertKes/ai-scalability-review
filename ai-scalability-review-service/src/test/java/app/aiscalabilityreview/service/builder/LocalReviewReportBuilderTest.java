@@ -52,11 +52,11 @@ class LocalReviewReportBuilderTest {
         assertThat(report.trafficScore).isEqualTo("GREEN");
         assertThat(report.latencyScore).isEqualTo("YELLOW");
         assertThat(report.persistenceScore).isEqualTo("RED");
-        assertThat(report.overallScore).isEqualTo("RED");
+        assertThat(report.overallScore).isEqualTo("GREEN");
         assertThat(report.avgRps).isEqualTo(41.7);
         assertThat(report.p99LatencyMs).isEqualTo(820.5);
         assertThat(report.mysqlConnectionPct).isEqualTo(78.9);
-        assertThat(report.aiModel).isEqualTo(AIModel.GEMINI_3_5_FLASH);
+        assertThat(report.aiModel).isEqualTo(AIModel.GEMINI_3_8_FLASH);
         assertThat(report.confluencePageUrl).isEqualTo("file:///out/2026-09-23-review.md");
     }
 
@@ -78,9 +78,9 @@ class LocalReviewReportBuilderTest {
         assertThat(report.trafficScore).isEqualTo("GREEN");
         assertThat(report.latencyScore).isEqualTo("YELLOW");
         assertThat(report.persistenceScore).isEqualTo("RED");
-        assertThat(report.overallScore).isEqualTo("RED");
+        assertThat(report.overallScore).isEqualTo("GREEN");
         assertThat(report.avgRps).isNull();
-        assertThat(report.aiModel).isEqualTo(AIModel.GEMINI_3_1_FLASH_LITE);
+        assertThat(report.aiModel).isEqualTo(AIModel.GEMINI_3_5_FLASH_LITE);
     }
 
     @Test

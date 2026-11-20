@@ -49,6 +49,11 @@ public class GenerateLocalReviewRequest {
     @Property(name = "atlas_cluster")
     public String atlasCluster;  // MongoDB Atlas cluster name, or null if not used
 
+    // The Atlas database (Datadog tag `databasename`) this service owns; optional. Without it only
+    // the cluster-level figures are collected and the database-size warning cannot be raised.
+    @Property(name = "atlas_database")
+    public String atlasDatabase;
+
     // Azure names, not Datadog tags: env "uat" lives in resource group "FTIUat". Both are optional —
     // the resource group is read from the infra repository when omitted, and the subscription falls
     // back to the Azure CLI profile default.

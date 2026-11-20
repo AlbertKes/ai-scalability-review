@@ -123,22 +123,78 @@ class ValidationReportAssemblerTest {
             .isLessThan(report.indexOf("## Check 8 — Recommendation Soundness"));
     }
 
+    /** The reason for the rule: a single wrong claim used to turn the whole report FAIL. */
     @Test
-    void oneFailAnywhereMakesTheWholeVerdictFail() {
+    void failuresInOneDimensionStillLeaveAGreenVerdictButAreListed() {
         assertThat(merge(STATIC_PARTIAL, DATA_PARTIAL, ADVICE_PARTIAL))
-            .contains("## Overall Validation Verdict: FAIL")
+            .contains("## Overall Validation Verdict: PASS")
+            .contains("**1 of 5 dimensions failed**")
+            .contains("| Resource Saturation | FAIL | 1 | 1 |")
             .contains("- **[Check 1]** HPA maxReplicas")
             .contains("- **[Check 4]** Dimension 4 computes one level lower");
     }
 
-    /** STATIC_PARTIAL holds the one WARNING and no FAIL, so the data group is the only thing absent. */
     @Test
-    void warningsWithoutFailsAreAConditionalPass() {
+    void twoFailedDimensionsAreYellow() {
+        assertThat(merge(STATIC_PARTIAL, DATA_PARTIAL, adviceFailing("Persistence")))
+            .contains("## Overall Validation Verdict: CONDITIONAL PASS")
+            .contains("**2 of 5 dimensions failed**");
+    }
+
+    @Test
+    void threeFailedDimensionsFailTheReport() {
+        String traffic = adviceFailing("Traffic").replace("## Check 8", "## Check 3").replace("Recommendation Soundness", "Cross-Source Metric Consistency");
+
+        assertThat(merge(traffic, DATA_PARTIAL, adviceFailing("Persistence")))
+            .contains("## Overall Validation Verdict: FAIL")
+            .contains("**3 of 5 dimensions failed**");
+    }
+
+    /** Two FAIL findings about the same dimension are one failed dimension. */
+    @Test
+    void manyFailuresInOneDimensionCountOnce() {
+        String twoInOne = DATA_PARTIAL.replace("Metric Numerical Fidelity: PASS", "Metric Numerical Fidelity: FAIL")
+            .replace("**[PASS]** Avg RPS", "**[FAIL]** CPU limit");
+
+        assertThat(merge(STATIC_PARTIAL, twoInOne, ADVICE_PARTIAL))
+            .contains("## Overall Validation Verdict: PASS")
+            .contains("**1 of 5 dimensions failed**");
+    }
+
+    /** A finding the model did not tag is placed by its own wording. */
+    @Test
+    void anUntaggedFindingIsPlacedByItsWording() {
+        String untagged = """
+            ## Check 8 — Recommendation Soundness: FAIL
+
+            ### Findings
+
+            **[FAIL]** Recommendation 1 — add an index on cart.user_id
+              - Reported: `no index`
+              - Actual: `index exists` [Source: V12__cart.sql]
+              - Detail: The MySQL migration already creates it.
+            """;
+
+        assertThat(merge("", "", untagged)).contains("| Persistence Layer | FAIL | 1 | 0 |");
+    }
+
+    /** A finding the model calls General belongs to no dimension and cannot, alone, fail the report. */
+    @Test
+    void aGeneralFindingCountsTowardNoDimension() {
+        String general = adviceFailing("General");
+
+        assertThat(merge(STATIC_PARTIAL, DATA_PARTIAL, general))
+            .contains("**1 of 5 dimensions failed**")
+            .contains("1 FAIL finding(s) belong to no single dimension");
+    }
+
+    @Test
+    void warningsDoNotMoveTheVerdict() {
         String noFail = DATA_PARTIAL.replace("Config Accuracy: FAIL", "Config Accuracy: PASS")
             .replace("**[FAIL]**", "**[PASS]**");
 
         assertThat(merge(STATIC_PARTIAL, noFail, ADVICE_PARTIAL))
-            .contains("## Overall Validation Verdict: CONDITIONAL PASS")
+            .contains("## Overall Validation Verdict: PASS")
             .doesNotContain("### Validation Notes");
     }
 
@@ -184,7 +240,21 @@ class ValidationReportAssemblerTest {
 
         assertThat(merge("", "", oddly))
             .contains("| 8 | Recommendation Soundness | FAIL | 1 issue(s) |")
-            .contains("## Overall Validation Verdict: FAIL");
+            .contains("| Latency & Thread Concurrency | FAIL | 1 | 0 |");
+    }
+
+    private String adviceFailing(String dimension) {
+        return """
+            ## Check 8 — Recommendation Soundness: FAIL
+
+            ### Findings
+
+            **[FAIL]** Recommendation 1 is wrong
+              - Reported: `missing`
+              - Actual: `present`
+              - Dimension: DIMENSION
+              - Detail: The source contradicts it.
+            """.replace("DIMENSION", dimension);
     }
 
     private String merge(String... partials) {

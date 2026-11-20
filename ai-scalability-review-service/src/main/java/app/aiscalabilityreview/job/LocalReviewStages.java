@@ -12,7 +12,7 @@ public final class LocalReviewStages {
     public static final String SYNTHESIS = "STAGE_4_SYNTHESIS";
     /** Checks 3, 4, 5, 7 — decided from the report alone, so no MCP server and no repository. */
     public static final String VALIDATION_STATIC = "STAGE_5A_VALIDATION_STATIC";
-    /** Checks 1, 2, 6 — re-queries Datadog and Azure, re-reads the infra repository. */
+    /** Checks 1, 2, 6 — compares the report with the collected metrics and re-reads the infra repository. */
     public static final String VALIDATION_DATA = "STAGE_5B_VALIDATION_DATA";
     /** Check 8 — re-reads the application source to re-verify each recommendation. */
     public static final String VALIDATION_ADVICE = "STAGE_5C_VALIDATION_ADVICE";
@@ -68,7 +68,8 @@ public final class LocalReviewStages {
         if (LocalReviewOutputPaths.CODE_CONTEXT.equals(artifactName)) return CODE_ANALYSIS;
         if (LocalReviewOutputPaths.INFRA_CONTEXT.equals(artifactName)
             || LocalReviewOutputPaths.MYSQL_TABLES.equals(artifactName)) return INFRA_CONTEXT;
-        if (LocalReviewOutputPaths.METRICS.equals(artifactName)) return METRIC_COLLECTION;
+        if (LocalReviewOutputPaths.METRICS.equals(artifactName)
+            || LocalReviewOutputPaths.AZURE_LIVE.equals(artifactName)) return METRIC_COLLECTION;
         if (LocalReviewOutputPaths.REPORT_SNAPSHOT.equals(artifactName)
             || artifactName.endsWith("-review.md")) return SYNTHESIS;
         if (LocalReviewOutputPaths.VALIDATION_STATIC.equals(artifactName)) return VALIDATION_STATIC;

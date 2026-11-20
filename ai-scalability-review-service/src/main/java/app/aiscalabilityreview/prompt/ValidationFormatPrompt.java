@@ -38,6 +38,12 @@ public final class ValidationFormatPrompt {
         - **FAIL** — at least one FAIL finding
         - **SKIPPED** — the entire check is not applicable (e.g., MySQL checks when MYSQL_HOST is N/A)
 
+        **Be compact: spend your output on what is wrong.** Write every FAIL, WARNING and SKIPPED
+        finding in the full Finding Format, but collapse everything that passes into **one** finding
+        per check — `**[PASS]** <n> items verified: <comma-separated names>`, with `Reported`,
+        `Actual` and `Dimension` lines naming what they were compared with and `Detail: all matched`.
+        Writing four lines for each of forty matching values is what made this stage take ten minutes.
+
         Each section carries its findings in the Finding Format given above, then a short summary:
 
         ```markdown
@@ -48,16 +54,19 @@ public final class ValidationFormatPrompt {
         **[PASS]** CPU requests (K8s deployment)
           - Reported: `500m`
           - Actual: `500m` [Source: code → k8s-gitops/environments/prod/apps/wonder/deployment.yaml:L42]
+          - Dimension: Resources
           - Detail: Exact match.
 
         **[FAIL]** HPA maxReplicas
           - Reported: `20`
           - Actual: `15` [Source: code → k8s-gitops/environments/prod/apps/wonder/hpa.yaml:L18]
+          - Dimension: Resources
           - Detail: Report overstates maxReplicas by 5. Likely copied from an older manifest version.
 
         **[WARNING]** MySQL storage used
           - Reported: `312 GB`
-          - Actual: `329 GB` [Source: Datadog MCP → query-metrics("max:azure.dbformysql_flexibleservers.storage_used{name:wonder-cart-mysql-prod}.rollup(max, 86400)")]
+          - Actual: `329 GB` [Source: Datadog API → query-metrics("max:azure.dbformysql_flexibleservers.storage_used{name:wonder-cart-mysql-prod}.rollup(max, 86400)")]
+          - Dimension: Persistence
           - Detail: 5.4% increase since report generation (within 10% tolerance for growing storage).
 
         ### Summary
@@ -72,7 +81,7 @@ public final class ValidationFormatPrompt {
         - [ ] Every section header ends in a status, and that status matches its findings
               (any FAIL → FAIL; else any WARNING → WARNING; else PASS or SKIPPED)
         - [ ] Every finding has a STATUS tag, a Reported value, an Actual value with `[Source: ...]`,
-              and a Detail
+              a Dimension, and a Detail
         - [ ] Every SKIPPED finding states why it was skipped
         - [ ] A check you could not complete is reported as its findings actually stand — never as
               PASS. A check that silently passes because it could not look is worse than no check.

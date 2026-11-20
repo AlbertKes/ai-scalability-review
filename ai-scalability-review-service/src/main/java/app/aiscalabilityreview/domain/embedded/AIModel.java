@@ -8,5 +8,9 @@ public enum AIModel {
     @MongoEnumValue("GEMINI_3_5_FLASH")
     GEMINI_3_5_FLASH,
     @MongoEnumValue("GEMINI_3_1_FLASH_LITE")
-    GEMINI_3_1_FLASH_LITE
+    GEMINI_3_1_FLASH_LITE,
+    @MongoEnumValue("GEMINI_3_8_FLASH")
+    GEMINI_3_8_FLASH,
+    @MongoEnumValue("GEMINI_3_5_FLASH_LITE")
+    GEMINI_3_5_FLASH_LITE
 }

@@ -2,6 +2,7 @@ package app.aiscalabilityreview.service.builder;
 
 import app.aiscalabilityreview.domain.ReviewReport;
 import app.aiscalabilityreview.service.GeminiModels;
+import app.aiscalabilityreview.service.OverallScore;
 import core.framework.api.json.Property;
 import core.framework.json.JSON;
 import core.framework.util.Strings;
@@ -48,7 +49,7 @@ public class LocalReviewReportBuilder {
         report.errorsScore = scores[2];
         report.resourcesScore = scores[3];
         report.persistenceScore = scores[4];
-        report.overallScore = overallScore(snapshot, scores);
+        report.overallScore = overallScore(scores);
         report.generatedAt = ZonedDateTime.now();
         report.recommendationsHigh = countOccurrences(params.reportMarkdown(), "(High Priority)");
         report.recommendationsMedium = countOccurrences(params.reportMarkdown(), "(Medium Priority)");
@@ -96,24 +97,12 @@ public class LocalReviewReportBuilder {
     }
 
     /**
-     * The worst of the five dimensions. Unknown dimensions are not treated as healthy: a run where
-     * no score could be read reports UNKNOWN rather than GREEN.
+     * The overall score of the five dimensions, by the {@link OverallScore} rule rather than the
+     * model's own figure. Unknown dimensions are not treated as healthy: a run where no score could
+     * be read reports UNKNOWN rather than GREEN.
      */
-    private static String overallScore(ReportSnapshot snapshot, String[] scores) {
-        String reported = normalize(snapshot == null ? null : snapshot.overallScore);
-        if (!UNKNOWN.equals(reported)) return reported;
-
-        boolean hasRed = false;
-        boolean hasYellow = false;
-        boolean hasUnknown = false;
-        for (String score : scores) {
-            if ("RED".equals(score)) hasRed = true;
-            else if ("YELLOW".equals(score)) hasYellow = true;
-            else if (UNKNOWN.equals(score)) hasUnknown = true;
-        }
-        if (hasRed) return "RED";
-        if (hasYellow) return "YELLOW";
-        return hasUnknown ? UNKNOWN : "GREEN";
+    private static String overallScore(String[] scores) {
+        return OverallScore.of(Arrays.asList(scores));
     }
 
     private static String normalize(String score) {

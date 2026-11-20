@@ -11,6 +11,7 @@ export const emptyRequest = (): LocalReviewRequestView => ({
   mysql_host: "",
   mysql_db: "",
   atlas_cluster: "",
+  atlas_database: "",
   azure_resource_group: "",
   azure_subscription_id: "",
   hpa_type: "none",

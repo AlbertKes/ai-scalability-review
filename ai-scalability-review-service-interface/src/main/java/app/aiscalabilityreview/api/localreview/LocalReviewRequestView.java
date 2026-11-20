@@ -39,6 +39,9 @@ public class LocalReviewRequestView {
     @Property(name = "atlas_cluster")
     public String atlasCluster;
 
+    @Property(name = "atlas_database")
+    public String atlasDatabase;
+
     @Property(name = "azure_resource_group")
     public String azureResourceGroup;
 

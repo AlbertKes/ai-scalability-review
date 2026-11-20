@@ -18,6 +18,7 @@ export interface LocalReviewRequestView {
   mysql_host: string | null;
   mysql_db: string | null;
   atlas_cluster: string | null;
+  atlas_database?: string | null;
   azure_resource_group: string | null;
   azure_subscription_id: string | null;
   hpa_type: string | null;

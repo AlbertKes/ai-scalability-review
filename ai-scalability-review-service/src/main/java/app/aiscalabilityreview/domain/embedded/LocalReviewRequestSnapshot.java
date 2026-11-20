@@ -43,6 +43,9 @@ public class LocalReviewRequestSnapshot {
     @Field(name = "atlas_cluster")
     public String atlasCluster;
 
+    @Field(name = "atlas_database")
+    public String atlasDatabase;
+
     @Field(name = "azure_resource_group")
     public String azureResourceGroup;
 

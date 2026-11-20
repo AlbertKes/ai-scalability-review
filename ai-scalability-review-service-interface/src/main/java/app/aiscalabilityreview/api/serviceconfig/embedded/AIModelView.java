@@ -8,5 +8,9 @@ public enum AIModelView {
     @Property(name = "GEMINI_3_5_FLASH")
     GEMINI_3_5_FLASH,
     @Property(name = "GEMINI_3_1_FLASH_LITE")
-    GEMINI_3_1_FLASH_LITE
+    GEMINI_3_1_FLASH_LITE,
+    @Property(name = "GEMINI_3_8_FLASH")
+    GEMINI_3_8_FLASH,
+    @Property(name = "GEMINI_3_5_FLASH_LITE")
+    GEMINI_3_5_FLASH_LITE
 }

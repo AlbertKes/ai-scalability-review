@@ -78,9 +78,15 @@ public class LocalReviewPromptBuilder {
 
         Now produce the complete scalability review report.
 
+        **Work in one pass.** Every input is already attached above, so do not list directories, read,
+        search or re-open any file, and do not call any other tool. Make exactly two tool calls — the
+        two writes below, issued together in one turn — and do not edit, re-read or re-write a file
+        afterwards. Think briefly, then write: the report is transcription and scoring against the
+        thresholds, not a research task. Keep each rationale to the few values that decide the score.
+
         Write the complete review report to file `{{OUTPUT_PATH}}` using the file system write tool.
 
-        Then write a second file, `{{SNAPSHOT_PATH}}`, containing only this JSON object. It is
+        Also write a second file, `{{SNAPSHOT_PATH}}`, containing only this JSON object. It is
         machine-read by the pipeline, so use exactly these keys, numbers without units or quotes,
         `null` for anything the report marks NOT_COLLECTED, and the same values the report states —
         do not recompute them.
@@ -162,7 +168,7 @@ public class LocalReviewPromptBuilder {
      * {@code ftiuat-flexible-consumer-db} + {@code order} gives
      * {@code ftiuat-flexible-consumer-db-order}. Returns null when the service has no MySQL database.
      *
-     * <p>No stage starts that server any more — Gemini CLI 0.46 cannot read a row-returning MySQL
+     * <p>No stage starts that server any more — Gemini CLI (first seen on 0.46, not re-tested on 0.69) cannot read a row-returning MySQL
      * MCP response (see {@link app.aiscalabilityreview.service.MySQLTableStorageService}) — but its
      * entry is still where the local connection details live, so the name is resolved the same way.
      */
@@ -187,18 +193,18 @@ public class LocalReviewPromptBuilder {
             .replace("{{OUTPUT_PATH}}", outputPath);
     }
 
-    /** Stage 3 — metric collection. The only stage that reaches an MCP server. */
+    /** Stage 3 — the Azure half of metric collection; the Datadog half is code. */
     public static String buildMetricCollectionPrompt(MetricCollectionParams p) {
         return MetricCollectionTaskPrompt.CONTENT
             .replace("{{SERVICE}}", p.serviceId)
             .replace("{{ENV}}", lower(p.env))
-            .replace("{{NAMESPACE}}", p.namespace)
+            .replace("{{NAMESPACE}}", nvl(p.namespace, UNKNOWN))
             .replace("{{MYSQL_HOST}}", nvl(p.mysqlHost, NOT_AVAILABLE))
             .replace("{{MYSQL_DB}}", nvl(p.mysqlDb, NOT_AVAILABLE))
-            .replace("{{MYSQL_TABLES_PATH}}", p.mysqlTablesPath)
             .replace("{{AZURE_RESOURCE_GROUP}}", nvl(p.azureResourceGroup, UNKNOWN))
             .replace("{{AZURE_SUBSCRIPTION}}", nvl(p.azureSubscriptionId, UNKNOWN))
             .replace("{{ATLAS_CLUSTER}}", nvl(p.atlasCluster, NOT_AVAILABLE))
+            .replace("{{ATLAS_DATABASE}}", nvl(p.atlasDatabase, NOT_AVAILABLE))
             .replace("{{KAFKA_CONSUMER_GROUPS}}", nvl(p.kafkaConsumerGroups, NOT_AVAILABLE))
             .replace("{{OUTPUT_PATH}}", p.outputPath);
     }
@@ -218,6 +224,7 @@ public class LocalReviewPromptBuilder {
             .replace("{{MYSQL_HOST}}", nvl(p.mysqlHost, NOT_AVAILABLE))
             .replace("{{MYSQL_DB}}", nvl(p.mysqlDb, NOT_AVAILABLE))
             .replace("{{ATLAS_CLUSTER}}", nvl(p.atlasCluster, NOT_AVAILABLE))
+            .replace("{{ATLAS_DATABASE}}", nvl(p.atlasDatabase, NOT_AVAILABLE))
             .replace("{{HPA_TYPE}}", nvl(p.hpaType, "none"))
             .replace("{{KAFKA_CONSUMER_GROUPS}}", nvl(p.kafkaConsumerGroups, NOT_AVAILABLE))
             .replace("{{CODE_CONTEXT_PATH}}", p.codeContextPath)
@@ -243,9 +250,9 @@ public class LocalReviewPromptBuilder {
     }
 
     /**
-     * Stage 5B — the checks that re-query the live sources (1, 2, 6). It is given neither the
-     * scoring thresholds nor the report format spec: 27 KB that only checks 4 and 7 read, and in an
-     * agentic loop every byte of it was re-sent on each of this group's tool round-trips.
+     * Stage 5B — the checks that compare the report with its collected inputs (1, 2, 6). It is
+     * given neither the scoring thresholds nor the report format spec: 27 KB that only checks 4 and
+     * 7 read, and in an agentic loop every byte of it was re-sent on each of this group's tool round-trips.
      */
     public static String buildDataValidationPrompt(ValidationPromptParams p) {
         String prompt = preamble(ValidationPreamblePrompt.SCOPE_DATA)
@@ -287,12 +294,15 @@ public class LocalReviewPromptBuilder {
             .replace("{{MYSQL_HOST}}", nvl(p.mysqlHost, NOT_AVAILABLE))
             .replace("{{MYSQL_DB}}", nvl(p.mysqlDb, NOT_AVAILABLE))
             .replace("{{ATLAS_CLUSTER}}", nvl(p.atlasCluster, NOT_AVAILABLE))
+            .replace("{{ATLAS_DATABASE}}", nvl(p.atlasDatabase, NOT_AVAILABLE))
             .replace("{{KAFKA_CONSUMER_GROUPS}}", nvl(p.kafkaConsumerGroups, NOT_AVAILABLE))
             .replace("{{INFRA_REPO_PATH}}", nvl(p.localInfraRepoPath, "not provided"))
             .replace("{{APP_REPO_PATH}}", nvl(p.localAppRepoPath, "not provided"))
             .replace("{{APP_SOURCE_ROOTS}}", appSourceRoots(p.localAppRepoPath, p.appCodePaths))
             .replace("{{INFRA_CONTEXT_PATH}}", p.infraContextPath)
             .replace("{{MYSQL_TABLES_PATH}}", p.mysqlTablesPath)
+            .replace("{{METRICS_PATH}}", p.metricsPath)
+            .replace("{{AZURE_LIVE_PATH}}", p.azureLivePath)
             .replace("{{OUTPUT_PATH}}", outputPath);
     }
 
@@ -342,6 +352,7 @@ public class LocalReviewPromptBuilder {
         public String mysqlHost;
         public String mysqlDb;
         public String atlasCluster;
+        public String atlasDatabase;
         public String kafkaConsumerGroups;
         public String mysqlTablesPath;
         public String azureResourceGroup;
@@ -359,6 +370,7 @@ public class LocalReviewPromptBuilder {
         public String mysqlHost;
         public String mysqlDb;
         public String atlasCluster;
+        public String atlasDatabase;
         public String hpaType;
         public String kafkaConsumerGroups;
         public String outputPath;
@@ -377,8 +389,11 @@ public class LocalReviewPromptBuilder {
         public String mysqlHost;
         public String mysqlDb;
         public String atlasCluster;
+        public String atlasDatabase;
         public String kafkaConsumerGroups;
         public String mysqlTablesPath;
+        public String metricsPath;
+        public String azureLivePath;
         /** Where each group writes its partial; the pipeline merges the three into one report. */
         public String staticOutputPath;
         public String dataOutputPath;

@@ -9,6 +9,7 @@ import app.aiscalabilityreview.prompt.LocalReviewPromptBuilder.ValidationPromptP
 import app.aiscalabilityreview.service.GeminiCliService;
 import app.aiscalabilityreview.service.GeminiCliService.GeminiRunRequest;
 import app.aiscalabilityreview.service.GeminiModels;
+import app.aiscalabilityreview.service.GeminiThinking;
 import app.aiscalabilityreview.service.ValidationReportAssembler;
 import app.aiscalabilityreview.service.ValidationReportAssembler.AssemblyParams;
 import core.framework.async.Executor;
@@ -27,7 +28,7 @@ import java.util.concurrent.Future;
  *
  * <p>Validation held all eight checks in a single agentic loop. In such a loop the whole context is
  * re-sent on every tool round-trip, and the eight checks have very different appetites: three
- * re-query Datadog and Azure, one reads the application source file by file, and four need nothing
+ * compare the report with the collected data, one reads the application source file by file, and four need nothing
  * but the report's own markdown. Holding them together meant every source file the recommendation
  * check opened was re-sent on each later round-trip, including the ones that were only re-counting
  * table rows. Measured on wonder-cart-service the stage spent 6.0M input tokens over 61 tool calls
@@ -41,13 +42,11 @@ import java.util.concurrent.Future;
  */
 public class LocalReviewValidationRunner {
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-    private static final List<String> DATA_MCP = List.of("datadog", "azure");
     private static final List<String> NO_MCP = List.of(GeminiCliService.MCP_DISABLED);
 
-    /** The static group makes no tool call, so it has no loop to run long; the other two do. */
-    private static final int STATIC_TIMEOUT_MINUTES = 10;
-    private static final int DATA_TIMEOUT_MINUTES = 20;
-    private static final int ADVICE_TIMEOUT_MINUTES = 20;
+    private static final int STATIC_TIMEOUT_MINUTES = GeminiCliService.STAGE_TIMEOUT_MINUTES;
+    private static final int DATA_TIMEOUT_MINUTES = GeminiCliService.STAGE_TIMEOUT_MINUTES;
+    private static final int ADVICE_TIMEOUT_MINUTES = GeminiCliService.STAGE_TIMEOUT_MINUTES;
 
     private final Logger logger = LoggerFactory.getLogger(LocalReviewValidationRunner.class);
 
@@ -126,12 +125,12 @@ public class LocalReviewValidationRunner {
             List.of(c.paths().runDir()), NO_MCP, STATIC_TIMEOUT_MINUTES), context));
     }
 
-    /** Checks 1, 2, 6 — the only group that starts an MCP server, and it reads the infra repo only. */
+    /** Checks 1, 2, 6 — compares the report with the collected files; reads the infra repo, no MCP server. */
     private void runData(Context c) {
         StageInput input = stageInput(c, LocalReviewStages.VALIDATION_DATA, LocalReviewOutputPaths.VALIDATION_DATA);
         stageRunner.runGemini(input, context -> geminiCliService.run(new GeminiRunRequest(
             LocalReviewPromptBuilder.buildDataValidationPrompt(c.params()), c.model(),
-            List.of(c.paths().runDir(), c.request().localInfraRepoPath), DATA_MCP, DATA_TIMEOUT_MINUTES), context));
+            List.of(c.paths().runDir(), c.request().localInfraRepoPath), NO_MCP, DATA_TIMEOUT_MINUTES), context));
     }
 
     /** Check 8 — the application repository, and no MCP server to re-query anything with. */
@@ -140,7 +139,7 @@ public class LocalReviewValidationRunner {
         stageRunner.runGemini(input, context -> geminiCliService.run(new GeminiRunRequest(
             LocalReviewPromptBuilder.buildAdviceValidationPrompt(c.params()), c.model(),
             List.of(c.paths().runDir(), c.request().localAppRepoPath, c.request().localInfraRepoPath),
-            NO_MCP, ADVICE_TIMEOUT_MINUTES), context));
+            NO_MCP, ADVICE_TIMEOUT_MINUTES, GeminiThinking.MEDIUM), context));
     }
 
     /** Merges whatever the three groups produced. Runs in this service and spends no tokens. */
@@ -175,8 +174,11 @@ public class LocalReviewValidationRunner {
         params.mysqlHost = request.mysqlHost;
         params.mysqlDb = request.mysqlDB;
         params.atlasCluster = request.atlasCluster;
+        params.atlasDatabase = request.atlasDatabase;
         params.kafkaConsumerGroups = request.kafkaConsumerGroups;
         params.mysqlTablesPath = paths.mysqlTables();
+        params.metricsPath = paths.metrics();
+        params.azureLivePath = paths.runDir() + "/" + LocalReviewOutputPaths.AZURE_LIVE;
         params.appCodePaths = request.appCodePaths;
         params.staticOutputPath = paths.validationStatic();
         params.dataOutputPath = paths.validationData();

@@ -132,7 +132,7 @@ query. Every run starts it with `DD_TOOLS=metrics,monitors`, which cuts its tool
 preflight's Atlas cluster probe reads the same keys, and still accepts the `DATADOG_*` names of the
 previous server.
 
-MySQL table storage is **not** collected through an MCP server. Gemini CLI 0.46 JSON-parses the
+MySQL table storage is **not** collected through an MCP server. Gemini CLI (first seen on 0.46, not re-tested on 0.69) JSON-parses the
 first text block of every MCP response into `structuredContent`, which the MCP SDK then validates
 against `record(string, unknown)`; `@benborla29/mcp-server-mysql` returns result rows as a JSON
 array, so every row-returning query fails client-side with

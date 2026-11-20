@@ -3,8 +3,11 @@ package app.aiscalabilityreview.service;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -78,5 +81,30 @@ class GeminiCliServiceTest {
         assertThatThrownBy(() -> new GeminiCliService("wonder-sandbox", null))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("app.gemini.cloud.location");
+    }
+
+    /** The timeout used to be read only after stdout closed, so it never fired on a process that was still running. */
+    @Test
+    void killsAProcessThatOutlivesTheStageTimeout() throws IOException {
+        Process process = new ProcessBuilder("sleep", "30").start();
+        long started = System.nanoTime();
+
+        assertThatThrownBy(() -> GeminiProcessOutput.await(process, 300, TimeUnit.MILLISECONDS))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("timed out");
+        assertThat(TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started)).isLessThan(10);
+        assertThat(process.isAlive()).isFalse();
+    }
+
+    @Test
+    void returnsTheOutputOfAProcessThatFinishesInTime() throws Exception {
+        Process process = new ProcessBuilder("echo", "hello").start();
+
+        assertThat(new String(GeminiProcessOutput.await(process, 10, TimeUnit.SECONDS), StandardCharsets.UTF_8)).isEqualTo("hello\n");
+    }
+
+    @Test
+    void stageTimeoutIsThirtyMinutes() {
+        assertThat(GeminiCliService.STAGE_TIMEOUT_MINUTES).isEqualTo(30);
     }
 }

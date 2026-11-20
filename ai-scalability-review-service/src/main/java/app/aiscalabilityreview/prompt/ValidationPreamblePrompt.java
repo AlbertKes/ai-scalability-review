@@ -23,19 +23,19 @@ public final class ValidationPreamblePrompt {
         This session owns **Checks 3, 4, 5 and 7** — the ones that need no external data at all. \
         Everything you need is in the report itself plus the two reference sections below, so you \
         should not need any tool other than the one that writes your output file. Another session \
-        re-queries Datadog, Azure and the repositories; a third re-verifies the recommendations.""";
+        re-verifies the report against its inputs and the repositories; a third re-verifies the recommendations.""";
 
     /** What the data session is told it owns. */
     public static final String SCOPE_DATA = """
-        This session owns **Checks 1, 2 and 6** — the ones that re-query the live data sources and \
-        re-read the infra repository. Another session checks the report's internal consistency, \
+        This session owns **Checks 1, 2 and 6** — the ones that compare the report with the collected \
+        metrics and Azure state and re-read the infra repository. Another session checks the report's internal consistency, \
         scoring, projection math and format; a third re-verifies the recommendations. Do not \
         comment on those.""";
 
     /** What the advice session is told it owns. */
     public static final String SCOPE_ADVICE = """
         This session owns **Check 8** alone — whether the report's recommendations are sound. \
-        Another session re-queries the live data sources; a third checks the report's internal \
+        Another session compares the report with the collected data; a third checks the report's internal \
         consistency, scoring, projection math and format. Do not comment on those: a recommendation \
         is in scope, the metric table behind it is not.""";
 
@@ -70,6 +70,7 @@ public final class ValidationPreamblePrompt {
         - **MySQL host/cluster**: {{MYSQL_HOST}}  (N/A if service does not use MySQL)
         - **MySQL database**: {{MYSQL_DB}}  (N/A if MYSQL_HOST is N/A)
         - **Atlas MongoDB cluster**: {{ATLAS_CLUSTER}}  (N/A if service does not use MongoDB)
+        - **Atlas database**: {{ATLAS_DATABASE}}  (N/A if not given)
         - **Kafka consumer groups**: {{KAFKA_CONSUMER_GROUPS}}  (comma-separated, or "N/A")
         - **MySQL table storage**: collected by the pipeline over JDBC into `{{MYSQL_TABLES_PATH}}`.
           There is no MySQL MCP server in this run; re-read that file instead of querying the database.
@@ -84,8 +85,21 @@ public final class ValidationPreamblePrompt {
         **[STATUS]** <what was checked>
           - Reported: `<value or claim from the report>`
           - Actual: `<value retrieved now>` [Source: <tool call or file path>]
+          - Dimension: <Traffic | Latency | Errors | Resources | Persistence | General>
           - Detail: <explanation of pass / discrepancy / skip reason>
         ```
+
+        `Dimension` names which of the review's five scoring dimensions the finding is about:
+        **Traffic** (RPS, Kafka throughput and lag, growth), **Latency** (latency percentiles,
+        timeouts, thread and concurrency limits), **Errors** (error rates, restarts, SLOs),
+        **Resources** (CPU, memory, HPA, replicas) or **Persistence** (MySQL, MongoDB, Redis, storage,
+        connections). Use `General` only for something that belongs to none of them (the report's
+        format, its scoring arithmetic, its capacity-projection maths).
+
+        The pipeline decides the overall verdict by counting how many *dimensions* hold a FAIL: three
+        or more is a FAIL, two is a yellow, one or none is green. Tag every finding accurately, and
+        mark FAIL only when the report is actually wrong — not for a style preference or something a
+        reader can still act on correctly (that is a WARNING).
 
         STATUS values:
         - **PASS** — reported value matches actual within tolerance

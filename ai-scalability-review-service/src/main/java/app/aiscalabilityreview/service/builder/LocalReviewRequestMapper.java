@@ -23,6 +23,7 @@ public final class LocalReviewRequestMapper {
         snapshot.mysqlHost = request.mysqlHost;
         snapshot.mysqlDB = request.mysqlDB;
         snapshot.atlasCluster = request.atlasCluster;
+        snapshot.atlasDatabase = request.atlasDatabase;
         snapshot.azureResourceGroup = request.azureResourceGroup;
         snapshot.azureSubscriptionId = request.azureSubscriptionId;
         snapshot.hpaType = request.hpaType;
@@ -54,6 +55,7 @@ public final class LocalReviewRequestMapper {
         request.mysqlHost = snapshot.mysqlHost;
         request.mysqlDB = snapshot.mysqlDB;
         request.atlasCluster = snapshot.atlasCluster;
+        request.atlasDatabase = snapshot.atlasDatabase;
         request.azureResourceGroup = snapshot.azureResourceGroup;
         request.azureSubscriptionId = snapshot.azureSubscriptionId;
         request.hpaType = snapshot.hpaType;
@@ -81,6 +83,7 @@ public final class LocalReviewRequestMapper {
         request.mysqlHost = view.mysqlHost;
         request.mysqlDB = view.mysqlDB;
         request.atlasCluster = view.atlasCluster;
+        request.atlasDatabase = view.atlasDatabase;
         request.azureResourceGroup = view.azureResourceGroup;
         request.azureSubscriptionId = view.azureSubscriptionId;
         request.hpaType = view.hpaType;
@@ -109,6 +112,7 @@ public final class LocalReviewRequestMapper {
         view.mysqlHost = snapshot.mysqlHost;
         view.mysqlDB = snapshot.mysqlDB;
         view.atlasCluster = snapshot.atlasCluster;
+        view.atlasDatabase = snapshot.atlasDatabase;
         view.azureResourceGroup = snapshot.azureResourceGroup;
         view.azureSubscriptionId = snapshot.azureSubscriptionId;
         view.hpaType = snapshot.hpaType;

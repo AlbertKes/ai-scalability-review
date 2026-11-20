@@ -35,7 +35,7 @@ public final class ValidationStaticChecksPrompt {
         | MySQL connection avg % | 3.5 Persistence Layer / DB Saturation → Connection Pool | Dimension 5 scoring rationale | Must match |
         | Capacity baseline RPS | 3.1 Traffic & Throughput → Average RPS | Capacity Projections → Current (Base) | Must match |
         | Capacity baseline requests/week | 3.1 Weekly Volumes (most recent week) | Capacity Projections → Current (Base) | Must be consistent |
-        | Overall Score | Dimension scores in Section 4 | Capacity Projections → Current (Base) status | Must match the worst dimension |
+        | Overall Score | Dimension scores in Section 4 | Capacity Projections → Current (Base) status | Must follow the overall rule: ≥ 3 RED dimensions → RED; 2 RED or > 2 YELLOW → YELLOW; otherwise GREEN |
 
         For each inconsistency, mark FAIL and quote both conflicting values with their exact locations
         (section name and bullet text).
@@ -66,10 +66,10 @@ public final class ValidationStaticChecksPrompt {
         **Dimension-specific metrics to look for in the rationale**:
 
         - **Dimension 1 — Traffic & Throughput**: WoW RPS growth %, peak/avg ratio, Kafka lag avg/peak
-        - **Dimension 2 — Latency & Thread Concurrency**: P50/P95/P99 avg, P99 peak, outbound timeout config
+        - **Dimension 2 — Latency & Thread Concurrency**: P50/P95/P99 avg, P99 peak
         - **Dimension 3 — Error Rates & Stability**: HTTP error rate avg and peak, container restarts, OOMKills
         - **Dimension 4 — Resource Saturation**: CPU avg/peak % of limit, memory avg/peak % of limit,
-          HPA trigger threshold, HPA headroom
+          HPA trigger threshold
         - **Dimension 5 — Persistence Layer**: MySQL connection % avg/peak, slow query daily avg,
           replication lag avg/peak, storage, largest table; or MongoDB read/write latency,
           connection pool %, query targeting ratio

@@ -11,6 +11,7 @@ import app.aiscalabilityreview.service.CostService;
 import app.aiscalabilityreview.service.GeminiModels;
 import app.aiscalabilityreview.service.NotificationService;
 import app.aiscalabilityreview.service.NotificationService.NotificationRequest;
+import app.aiscalabilityreview.service.OverallScore;
 import app.aiscalabilityreview.service.ReviewService;
 import app.aiscalabilityreview.service.ValidationReportParser;
 import app.aiscalabilityreview.service.builder.LocalReviewReportBuilder;
@@ -26,6 +27,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
@@ -66,8 +68,8 @@ public class LocalReviewRunFinalizer {
 
         // Everything that reads a file or writes another collection happens before the lock, so the
         // job stays locked only for the field assignments.
-        String overallScore = resolveScore(loaded);
         Validation validation = resolveValidation(loaded, paths);
+        String overallScore = resolveScore(loaded, validation.verdict());
         long wallClockMs = wallClockMs(loaded);
         reviewService.mutateJob(jobId, job -> {
             applyTotals(job, settings, wallClockMs);
@@ -187,12 +189,15 @@ public class LocalReviewRunFinalizer {
     }
 
     /**
-     * The report's overall score, for the run list to filter on. An absent report leaves it null —
-     * UNKNOWN is a score the report itself states, not one invented here.
+     * The run's overall score, for the run list to filter on: the five dimension scores and the
+     * validation verdict, combined by {@link OverallScore}. An absent report leaves it null.
      */
-    private String resolveScore(ReviewJob job) {
-        if (job.reportId == null) return job.overallScore;
-        return reviewService.getReviewReport(job.reportId).map(report -> report.overallScore).orElse(job.overallScore);
+    private String resolveScore(ReviewJob job, String verdict) {
+        ReviewReport report = job.reportId == null ? null : reviewService.getReviewReport(job.reportId).orElse(null);
+        if (report == null) return job.overallScore;
+        List<String> scores = Arrays.asList(report.trafficScore, report.latencyScore, report.errorsScore,
+            report.resourcesScore, report.persistenceScore, OverallScore.ofValidation(verdict));
+        return OverallScore.of(scores);
     }
 
     /**

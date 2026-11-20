@@ -46,29 +46,7 @@ class LocalReviewPromptBuilderTest {
         assertThat(prompt).doesNotContain("{{")
             .contains("**Environment**: prod")
             .contains("rfprodv2-flexible-wonder-db.mysql.database.azure.com")
-            .contains("/out/metrics.md")
-            .contains("**Atlas MongoDB cluster**: N/A");
-    }
-
-    /**
-     * The table sizes are collected by the pipeline, not by an MCP server, so the stage must be told
-     * to read the file rather than to look for a MySQL tool — see MySQLTableStorageService.
-     */
-    @Test
-    void metricCollectionPromptPointsAtTheLocallyCollectedMysqlTables() {
-        MetricCollectionParams params = new MetricCollectionParams();
-        params.serviceId = "ba-web-api";
-        params.env = "prod";
-        params.namespace = "prod-ba";
-        params.mysqlHost = "N/A";
-        params.mysqlDb = "N/A";
-        params.mysqlTablesPath = "/out/mysql-tables.md";
-        params.outputPath = "/out/metrics.md";
-
-        assertThat(LocalReviewPromptBuilder.buildMetricCollectionPrompt(params))
-            .doesNotContain("{{")
-            .contains("/out/mysql-tables.md")
-            .contains("Do not query MySQL and do not look for a MySQL MCP server");
+            .contains("/out/metrics.md");
     }
 
     /** A resolved resource group must reach the prompt verbatim; env must never be offered as one. */
@@ -104,51 +82,60 @@ class LocalReviewPromptBuilderTest {
             .contains("is a Datadog tag value, not an Azure name");
     }
 
-    /** Every per-window figure has to be rolled up, both to be derivable and to keep the response small. */
+    /** The executor sets only what the Azure session needs; any other field being null must not break the prompt. */
     @Test
-    void metricCollectionPromptRollsUpTheDatadogQueries() {
-        assertThat(LocalReviewPromptBuilder.buildMetricCollectionPrompt(metricParams()))
-            .contains(".as_count().rollup(sum, 86400)")
-            .contains(".as_count().rollup(sum, 3600)")
-            .contains("`to - 2419200`")
-            .doesNotContain("{{");
+    void metricCollectionPromptBuildsFromTheFieldsTheExecutorSets() {
+        MetricCollectionParams params = new MetricCollectionParams();
+        params.serviceId = "wonder-cart-service";
+        params.env = "prod";
+        params.namespace = "prod-consumer";
+        params.mysqlHost = "db";
+        params.outputPath = "/out/azure-live.md";
+
+        assertThat(LocalReviewPromptBuilder.buildMetricCollectionPrompt(params)).doesNotContain("{{").contains("/out/azure-live.md");
     }
 
-    /** The @us-all/datadog-mcp server names its tools with hyphens and mangles point timestamps. */
+    /** Datadog is read by the pipeline over REST, so the Azure session must not be told to query it. */
     @Test
-    void metricCollectionPromptTargetsTheUsAllDatadogServer() {
+    void metricCollectionPromptIsAzureOnly() {
         assertThat(LocalReviewPromptBuilder.buildMetricCollectionPrompt(metricParams()))
-            .contains("query-metrics(\"<exact metric query>\")")
-            .contains("Call `get-monitors` with `tags = \"service:wonder-cart-service\"`")
-            .contains("`list-slos` with `tagsQuery = \"service:wonder-cart-service\"`")
-            .contains("`slo-compliance-snapshot`")
-            .contains("Never read a date from `points[].timestamp`")
-            .contains("Keep every response under 40,000 characters")
-            .contains("issue **four** `query-metrics` calls, one per week")
-            .doesNotContain("pointlist`")
-            .doesNotContain("exposes no SLO tool");
-    }
-
-    /** Averages need an average rollup, and Atlas dbstats must be summed per replica-set member. */
-    @Test
-    void metricCollectionPromptAveragesWithAnAverageRollup() {
-        assertThat(LocalReviewPromptBuilder.buildMetricCollectionPrompt(metricParams()))
-            .contains("avg:kafka.consumer_lag{env:uat,consumer_group:<group>} by {topic}.rollup(avg, 86400)")
-            .contains("avg:azure.dbformysql_flexibleservers.replication_lag{name:")
-            .contains("sum:mongodb.atlas.dbstats.data.size{clustername:")
-            .contains("by {host}.rollup(max, 86400)")
-            .contains("mongodb.atlas.system.disk.space.used")
-            .doesNotContain("avg:mongodb.atlas.dbstats");
+            .doesNotContain("{{")
+            .doesNotContain("query-metrics")
+            .doesNotContain("get-monitors")
+            .doesNotContain("rollup(")
+            .contains("mysql_server_param_get")
+            .contains("{ \"mysql_max_connections\": null }");
     }
 
     @Test
-    void validationDataChecksUseTheDayAlignedWindowAndTheUsAllTools() {
+    void scoringReferenceTreatsSharedMetricsAsRemindersAndIgnoresCircuitBreakers() {
+        assertThat(MetricScorePrompt.CONTENT)
+            .contains("Shared MySQL server — reminders, not scored")
+            .contains("≥ 50 GB (**warning only — never RED**)")
+            .contains("≤ 1,000 | 1,000 – 10,000 | > 10,000")
+            .doesNotContain("| **Circuit breakers on critical paths**")
+            .doesNotContain("| **Outbound HTTP client timeout configured**")
+            .contains("tables > 1 GB")
+            .doesNotContain("| **Replication lag — 28-day average**");
+    }
+
+    @Test
+    void validationDataChecksCompareWithTheCollectedFilesAndQueryNothing() {
         assertThat(ValidationDataChecksPrompt.CONTENT)
-            .contains("query-metrics(\"...\")")
-            .contains("`list-slos`")
-            .contains("Never read a date from `points[].timestamp`")
-            .doesNotContain("from=now-28d")
-            .doesNotContain("query_metrics(");
+            .contains("{{METRICS_PATH}}")
+            .contains("{{AZURE_LIVE_PATH}}")
+            .contains("Collection Gaps")
+            .doesNotContain("query-metrics")
+            .doesNotContain("list-slos")
+            .doesNotContain("re-run the identical tool call");
+    }
+
+    @Test
+    void recommendationSoundnessSkipsTheTwoOutOfScopeRecommendations() {
+        assertThat(RecommendationSoundnessPrompt.CONTENT)
+            .contains("explicit outbound HTTP client")
+            .contains("distributed locking for periodic background Kafka message handlers")
+            .contains("out of scope for now");
     }
 
     @Test
@@ -210,6 +197,8 @@ class LocalReviewPromptBuilderTest {
             .contains("Check 2 — Metric Numerical Fidelity")
             .contains("Check 6 — NOT_COLLECTED Authenticity")
             .contains("/out/mysql-tables.md")
+            .contains("@/out/metrics.md")
+            .contains("@/out/azure-live.md")
             .contains("/infra")
             .contains("/out/validation-data.md");
     }
@@ -298,6 +287,8 @@ class LocalReviewPromptBuilderTest {
         params.atlasCluster = null;
         params.kafkaConsumerGroups = "wonder-cart-service";
         params.mysqlTablesPath = "/out/mysql-tables.md";
+        params.metricsPath = "/out/metrics.md";
+        params.azureLivePath = "/out/azure-live.md";
         params.staticOutputPath = "/out/validation-static.md";
         params.dataOutputPath = "/out/validation-data.md";
         params.adviceOutputPath = "/out/validation-advice.md";

@@ -6,7 +6,7 @@ public class ReviewTaskPrompt {
      * earlier stages into three local files, so this stage uses no MCP server and makes no tool
      * call other than reading those files and writing the report.
      * Placeholders: {{SERVICE}}, {{ENV}}, {{NAMESPACE}}, {{MYSQL_HOST}}, {{MYSQL_DB}},
-     * {{ATLAS_CLUSTER}}, {{HPA_TYPE}}, {{KAFKA_CONSUMER_GROUPS}},
+     * {{ATLAS_CLUSTER}}, {{ATLAS_DATABASE}}, {{HPA_TYPE}}, {{KAFKA_CONSUMER_GROUPS}},
      * {{CODE_CONTEXT_PATH}}, {{INFRA_CONTEXT_PATH}}, {{METRICS_PATH}}
      */
     public static final String CONTENT;
@@ -25,13 +25,14 @@ public class ReviewTaskPrompt {
         - **MySQL host/cluster**: {{MYSQL_HOST}}  (set to "N/A" if service does not use MySQL)
         - **MySQL database**: {{MYSQL_DB}}  (set to "N/A" if MYSQL_HOST is N/A)
         - **Atlas MongoDB cluster**: {{ATLAS_CLUSTER}}  (set to "N/A" if service does not use MongoDB)
+        - **Atlas database**: {{ATLAS_DATABASE}}  (the database this service owns; "N/A" if not given)
         - **HPA type**: {{HPA_TYPE}}  (one of: HPA | none)
         - **Kafka consumer groups**: {{KAFKA_CONSUMER_GROUPS}}  (comma-separated, or "N/A")
 
         ## Input Files
 
-        Everything you need has already been collected. Read these three files and work only from
-        them — do **not** call any MCP server, and do **not** re-query any metric.
+        Everything you need has already been collected and is attached in full below this task, so you
+        do not need to open the files again. Work only from them — do **not** call any MCP server, and do **not** re-query any metric.
 
         | File | Contents |
         | :--- | :--- |
@@ -51,11 +52,21 @@ public class ReviewTaskPrompt {
           use the repository path shown in that file's heading, not the context file name.
         - `[Source: context → code-context.md]` — a value from the business context document.
         - `[Source: Azure MCP → <tool name>(<args>)]`, `[Source: MySQL (<host>/<db>) → <exact SQL query>]`,
-          `[Source: Datadog MCP → query-metrics("<exact metric query>")]` — copy the annotation
+          `[Source: Datadog API → query-metrics("<exact metric query>")]` — copy the annotation
           verbatim from `{{METRICS_PATH}}`.
 
         If a value is marked `NOT_COLLECTED: <reason>` in the input files, carry that marker and its
         reason into the report unchanged. Never substitute an estimate for a missing value.
+        Conversely, never mark a value `NOT_COLLECTED` that `{{METRICS_PATH}}` actually holds: a
+        storage, size or disk figure that looks small or large compared with the provisioned size is
+        still a collected figure — report it as it is.
+
+        **Shared resources are reminders, not findings against this service.** MySQL flexible-server
+        metrics (replication lag, server storage, server CPU) and Atlas cluster-level metrics describe
+        a server or cluster that many services share. Report them as a reminder for the owning team
+        in the persistence section, labelled as shared, and never attribute them to this service or
+        let them set this service's dimension score. Metrics scoped to this service's own database
+        (its connections, its tables, its Atlas database size) are in scope.
 
         **No approximations.** Never write "around", "about", "approximately", "roughly", "~",
         "under", or "over" before a metric value anywhere in the report. Use the exact figure from
@@ -92,8 +103,30 @@ public class ReviewTaskPrompt {
         ### Step 2 — Load the Business Context
 
         Read `{{CODE_CONTEXT_PATH}}` and use it to inform the analysis: critical synchronous paths,
-        unbounded queries, blocking patterns, missing timeouts, missing circuit breakers, scheduled
-        jobs, and any in-process state that is not replica-safe.
+        unbounded queries, blocking patterns, missing timeouts, scheduled jobs, and any in-process
+        state that is not replica-safe. Circuit breakers are not assessed: core-ng has none, so do
+        not recommend adding one and do not score on their absence.
+
+        **Out of scope for now — do not assess, score or recommend**: explicit outbound HTTP client
+        timeouts, and distributed locking for periodic background Kafka message handlers. Do not write
+        a finding or an action item about either, and do not list them as a risk.
+
+        Rules for using that document:
+
+        - **You cannot see the source code.** Cite a source file path only if it appears verbatim in
+          `{{CODE_CONTEXT_PATH}}` or `{{INFRA_CONTEXT_PATH}}`. Never construct, complete or guess a
+          path (no invented package directories); when the path is not given, name the class or
+          property and write `[Source: context → code-context.md]`.
+        - **This is a core-ng service, not Spring.** Phrase recommendations in core-ng terms
+          (`HTTPClient` builder timeouts, `ExecutorConfig`, `kafka().poolSize`, `db().batchSize`,
+          `app.properties` keys). Do not recommend Spring mechanisms (`@Transactional`, `@Async`,
+          `RestTemplate`, `application.yml`, Resilience4j / Hystrix).
+        - **A property default is not the deployed value.** A value from `app.properties` or a code
+          default can be overridden by an environment variable in the K8s manifests (the key
+          upper-cased, dots → underscores, e.g. `APP_ENABLEKAFKACONSUMER`) or by `conf/<env>/resources`.
+          Look for an override in the ConfigMap / Deployment `env` in `{{INFRA_CONTEXT_PATH}}` first;
+          report the value in force and cite the manifest. If no override is visible, say "default,
+          no override found in the collected manifests" rather than presenting it as the live value.
 
         ### Step 3 — Load the Collected Metrics
 
@@ -106,9 +139,11 @@ public class ReviewTaskPrompt {
         - `mem_avg_pct_of_limit = mem_avg_mib / mem_limit_mib × 100`
         - `mem_peak_pct_of_limit = mem_peak_mib / mem_limit_mib × 100`
         - MySQL connections as a percentage of `max_connections`, average and peak.
-        - MySQL storage: score the absolute used GB. Derive a utilisation percentage
-          (used ÷ provisioned) **only** when auto-grow is OFF — with auto-grow ON the provisioned
-          figure expands by itself, so the ratio tracks Azure's behaviour rather than the service's.
+        - MySQL server storage used: report the absolute GB as a shared-resource reminder (it is the
+          whole server's, not this service's). Derive a utilisation percentage (used ÷ provisioned)
+          **only** when auto-grow is OFF — with auto-grow ON the provisioned figure expands by itself.
+        - MongoDB database storage: the database named in the request, on-disk size in GB. At 50 GB
+          or more it is a YELLOW warning (never RED).
 
         Show both the absolute value and the computed percentage in the report, and state the limit
         you divided by so the arithmetic is reproducible.
@@ -117,7 +152,7 @@ public class ReviewTaskPrompt {
 
         Cite the exact source for each config value and metric value in every cross-reference.
 
-        - Does HPA `maxReplicas` leave headroom at projected +1Q traffic? Given {{HPA_TYPE}}, what
+        - Given {{HPA_TYPE}}, what
           trigger metric controls scale-out, and is the threshold appropriate for the observed load?
           **Important — HPA CPU averageUtilization is relative to the CPU request, not the CPU limit.**
           Compute the effective trigger as a percentage of the limit:
@@ -133,6 +168,9 @@ public class ReviewTaskPrompt {
         - Do monitors in ALERT state correlate with the metric findings?
         - Does the business context reveal batch jobs or scheduled tasks that would create
           predictable traffic spikes invisible in the 28-day average?
+        - Replication lag, MySQL server storage and Atlas cluster disk are shared-resource reminders:
+          list them, with their thresholds, in the "Shared-resource reminders" list; they do not
+          move this service's score.
         - If MySQL table storage was collected, does the largest table's growth trajectory put
           storage auto-grow or IOPS scaling at risk within +1Q?
 

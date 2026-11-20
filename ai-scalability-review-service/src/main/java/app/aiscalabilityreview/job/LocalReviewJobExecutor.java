@@ -10,11 +10,16 @@ import app.aiscalabilityreview.prompt.LocalReviewPromptBuilder;
 import app.aiscalabilityreview.prompt.LocalReviewPromptBuilder.MetricCollectionParams;
 import app.aiscalabilityreview.prompt.LocalReviewPromptBuilder.ReviewPromptParams;
 import app.aiscalabilityreview.service.AppSettingsService;
+import app.aiscalabilityreview.service.DatadogMetricsCollector;
+import app.aiscalabilityreview.service.DatadogMetricsCollector.Collected;
+import app.aiscalabilityreview.service.DatadogMetricsCollector.Params;
 import app.aiscalabilityreview.service.GeminiCliService;
 import app.aiscalabilityreview.service.GeminiCliService.GeminiRunRequest;
+import app.aiscalabilityreview.service.GeminiCliService.GeminiRunResult;
 import app.aiscalabilityreview.service.GeminiModels;
 import app.aiscalabilityreview.service.InfraContextService;
 import app.aiscalabilityreview.service.InfraContextService.InfraContextParams;
+import app.aiscalabilityreview.service.MetricsAssembler;
 import app.aiscalabilityreview.service.MySQLTableStorageService;
 import app.aiscalabilityreview.service.MySQLTableStorageService.MySQLTableParams;
 import app.aiscalabilityreview.service.ReviewService;
@@ -26,8 +31,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.Future;
 
 /**
@@ -42,8 +49,8 @@ import java.util.concurrent.Future;
  *   <li><b>code analysis</b> — reads the application source, no MCP server.</li>
  *   <li><b>infra context</b> — runs in this service, selects the relevant infra files and queries
  *       the MySQL table sizes over JDBC, zero tokens.</li>
- *   <li><b>metric collection</b> — the only stage with MCP servers; small context, many tool calls,
- *       cheapest model.</li>
+ *   <li><b>metric collection</b> — the Datadog figures are read here over the REST API; a model reads
+ *       the Azure state through the Azure MCP server.</li>
  *   <li><b>synthesis</b> — large context, no tool calls, no MCP servers; does the scoring.</li>
  *   <li><b>validation</b> — independent re-check, optional.</li>
  * </ol>
@@ -54,22 +61,22 @@ import java.util.concurrent.Future;
  */
 public class LocalReviewJobExecutor {
     /** Bumped whenever the prompt templates change, so two runs can be told apart (FR-6.7). */
-    public static final String PROMPT_VERSION = "AD-6385-validation-split";
+    public static final String PROMPT_VERSION = "AD-6385-overall-rule";
 
-    private static final String DATADOG_MCP = "datadog";
     private static final String AZURE_MCP = "azure";
     /**
-     * The data stages query Datadog and Azure only. The MySQL MCP server is deliberately absent:
-     * Gemini CLI 0.46 cannot read a row-returning response from it (see
+     * Only the Azure MCP server is started, and only by the metric stage; Datadog is read over its REST API
+     * (see {@link DatadogMetricsCollector}). The MySQL MCP server is deliberately absent:
+     * Gemini CLI (first seen on 0.46, not re-tested on 0.69) cannot read a row-returning response from it (see
      * {@link MySQLTableStorageService}), so the table sizes are collected in stage 2 instead and
      * leaving the server out of the allowlist means it is neither started nor described to the model.
      */
-    private static final List<String> DATA_MCP = List.of(DATADOG_MCP, AZURE_MCP);
+    private static final List<String> AZURE_MCP_ONLY = List.of(AZURE_MCP);
     private static final List<String> NO_MCP = List.of(GeminiCliService.MCP_DISABLED);
 
-    private static final int CODE_ANALYSIS_TIMEOUT_MINUTES = 15;
-    private static final int METRIC_COLLECTION_TIMEOUT_MINUTES = 20;
-    private static final int SYNTHESIS_TIMEOUT_MINUTES = 15;
+    private static final int CODE_ANALYSIS_TIMEOUT_MINUTES = GeminiCliService.STAGE_TIMEOUT_MINUTES;
+    private static final int METRIC_COLLECTION_TIMEOUT_MINUTES = GeminiCliService.STAGE_TIMEOUT_MINUTES;
+    private static final int SYNTHESIS_TIMEOUT_MINUTES = GeminiCliService.STAGE_TIMEOUT_MINUTES;
 
     private final Logger logger = LoggerFactory.getLogger(LocalReviewJobExecutor.class);
 
@@ -81,6 +88,8 @@ public class LocalReviewJobExecutor {
     InfraContextService infraContextService;
     @Inject
     MySQLTableStorageService mysqlTableStorageService;
+    @Inject
+    DatadogMetricsCollector datadogMetricsCollector;
     @Inject
     LocalReviewStageRunner stageRunner;
     @Inject
@@ -224,30 +233,42 @@ public class LocalReviewJobExecutor {
         });
     }
 
+    /**
+     * The Datadog figures are read here, over the REST API, and the Azure state by a model. The model
+     * used to do both and its copy of the numbers was wrong often enough to fail validation (see
+     * {@link DatadogMetricsCollector}); what remains for it is the part that needs judgement.
+     */
     private void runMetricCollectionStage(ReviewJob job, GenerateLocalReviewRequest request,
                                           LocalReviewArtifactPaths paths, LocalReviewRunStats stats, RunHandle handle) {
         String stage = LocalReviewStages.METRIC_COLLECTION;
         if (stageRunner.skipIfReused(job, stage)) return;
         String model = GeminiModels.orDefault(request.metricCollectionModel, GeminiModels.METRIC_COLLECTION_DEFAULT);
         StageInput input = new StageInput(job.jobId, stage, true, stats, paths.runDir(), handle,
-            List.of(LocalReviewOutputPaths.METRICS));
+            List.of(LocalReviewOutputPaths.METRICS, LocalReviewOutputPaths.AZURE_LIVE));
         stageRunner.runGemini(input, context -> {
+            Collected datadog = datadogMetricsCollector.collect(new Params(request.service, request.env.toLowerCase(Locale.US),
+                request.mysqlHost, request.atlasCluster, request.atlasDatabase, request.kafkaConsumerGroups));
+            String azurePath = paths.runDir() + "/" + LocalReviewOutputPaths.AZURE_LIVE;
             MetricCollectionParams params = new MetricCollectionParams();
             params.serviceId = request.service;
             params.env = request.env;
             params.namespace = request.namespace;
             params.mysqlHost = request.mysqlHost;
-            params.mysqlDb = request.mysqlDB;
-            params.atlasCluster = request.atlasCluster;
-            params.kafkaConsumerGroups = request.kafkaConsumerGroups;
-            params.mysqlTablesPath = paths.mysqlTables();
             params.azureResourceGroup = job.azureResourceGroup;
             params.azureSubscriptionId = firstSet(request.azureSubscriptionId, System.getenv("AZURE_SUBSCRIPTION_ID"));
-            params.outputPath = paths.metrics();
-            return geminiCliService.run(new GeminiRunRequest(
+            params.outputPath = azurePath;
+            GeminiRunResult result = geminiCliService.run(new GeminiRunRequest(
                 LocalReviewPromptBuilder.buildMetricCollectionPrompt(params), model,
-                List.of(paths.runDir()), DATA_MCP, METRIC_COLLECTION_TIMEOUT_MINUTES), context);
+                List.of(paths.runDir()), AZURE_MCP_ONLY, METRIC_COLLECTION_TIMEOUT_MINUTES), context);
+            Files.writeString(Path.of(paths.metrics()), MetricsAssembler.assemble(request.service, request.env.toLowerCase(Locale.US),
+                datadog, readIfPresent(azurePath), readIfPresent(paths.mysqlTables()), datadog.windowEnd()));
+            return result;
         });
+    }
+
+    private String readIfPresent(String path) throws IOException {
+        Path file = Path.of(path);
+        return Files.exists(file) ? Files.readString(file) : null;
     }
 
     private void runSynthesisStage(ReviewJob job, GenerateLocalReviewRequest request,
@@ -268,6 +289,7 @@ public class LocalReviewJobExecutor {
             params.mysqlHost = request.mysqlHost;
             params.mysqlDb = request.mysqlDB;
             params.atlasCluster = request.atlasCluster;
+            params.atlasDatabase = request.atlasDatabase;
             params.hpaType = request.hpaType;
             params.kafkaConsumerGroups = request.kafkaConsumerGroups;
             params.outputPath = paths.reviewReport();

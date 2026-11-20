@@ -39,12 +39,12 @@ export const STAGE_DESCRIPTIONS: Record<string, string> = {
   STAGE_2_INFRA_CONTEXT:
     "Runs inside the service: selects infra files and queries MySQL table sizes over JDBC. Spends no tokens.",
   STAGE_3_METRIC_COLLECTION:
-    "The only stage with MCP servers (Datadog, Azure). Small context, many tool calls, cheapest model.",
+    "A model reads the live Azure state through the Azure MCP server.",
   STAGE_4_SYNTHESIS: "Large context, zero tool calls. Writes the report and the score snapshot.",
   STAGE_5A_VALIDATION_STATIC:
     "Checks 3, 4, 5, 7 — decided from the report alone. No MCP server, no repository, no tool calls.",
   STAGE_5B_VALIDATION_DATA:
-    "Checks 1, 2, 6 — re-queries Datadog and Azure and re-reads the infra repository. Runs beside 5A and 5C.",
+    "Checks 1, 2, 6 — compares the report with the collected metrics and the infra repository. No MCP server. Runs beside 5A and 5C.",
   STAGE_5C_VALIDATION_ADVICE:
     "Check 8 — re-reads the application source to re-verify each recommendation. Runs beside 5A and 5B.",
   STAGE_5D_VALIDATION_REPORT:
@@ -101,8 +101,10 @@ export const SCORES: Score[] = ["GREEN", "YELLOW", "RED", "UNKNOWN"];
 
 export const VALIDATION_VERDICTS = ["PASS", "CONDITIONAL_PASS", "FAIL", "UNKNOWN"];
 
-/** Model ids Gemini CLI 0.46 accepts; the backend rejects anything else before a run starts. */
+/** Model ids Gemini CLI accepts; the backend rejects anything else before a run starts. */
 export const GEMINI_MODELS = [
+  "gemini-3.8-flash",
+  "gemini-3.5-flash-lite",
   "gemini-3.5-flash",
   "gemini-3.1-flash-lite",
   "gemini-3.1-pro-preview",
@@ -112,10 +114,10 @@ export const GEMINI_MODELS = [
 ];
 
 export const STAGE_MODEL_DEFAULTS: Record<string, string> = {
-  code_analysis_model: "gemini-3.5-flash",
-  metric_collection_model: "gemini-3.1-flash-lite",
-  synthesis_model: "gemini-3.5-flash",
-  validation_model: "gemini-3.5-flash",
+  code_analysis_model: "gemini-3.8-flash",
+  metric_collection_model: "gemini-3.8-flash",
+  synthesis_model: "gemini-3.8-flash",
+  validation_model: "gemini-3.8-flash",
 };
 
 /**

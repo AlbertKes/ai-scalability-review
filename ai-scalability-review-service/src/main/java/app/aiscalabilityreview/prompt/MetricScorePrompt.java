@@ -28,6 +28,9 @@ public class MetricScorePrompt {
         A dimension with **no RED but at least one YELLOW metric** is scored YELLOW.
         A dimension is GREEN only if all its metrics are GREEN.
         
+        **Overall score** — over the dimension scores: three or more RED → RED; exactly two RED, or more
+        than two YELLOW → YELLOW; otherwise GREEN. One RED dimension alone does not make the overall RED.
+        
         ---
         
         ## Dimension 1 — Traffic & Throughput
@@ -36,8 +39,8 @@ public class MetricScorePrompt {
         | :--- | :--- | :--- | :--- |
         | **Average RPS week-over-week growth** | < 5 % | 5 % – 15 % | > 15 % |
         | **Peak RPS / Average RPS ratio** (spikiness) | < 3× | 3× – 6× | > 6× |
-        | **Kafka consumer lag — 28-day average** (messages) | ≤ 1 | 1 – 10 | > 10 |
-        | **Kafka consumer lag — peak observed** (messages) | ≤ 50 | 50 – 200 | > 200 |
+        | **Kafka consumer lag — 28-day average** (messages) | ≤ 100 | 100 – 1,000 | > 1,000 |
+        | **Kafka consumer lag — peak observed** (messages) | ≤ 1,000 | 1,000 – 10,000 | > 10,000 |
         | **Metric availability** | All collected | 1–2 missing | > 2 missing or gaps > 3 days |
         
         ---
@@ -50,9 +53,10 @@ public class MetricScorePrompt {
         | **P95 latency — 28-day average** | < 200 ms | 200 – 500 ms | > 500 ms |
         | **P99 latency — 28-day average** | < 500 ms | 500 ms – 1.5 s | > 1.5 s |
         | **P99 latency — peak observed** | < 1 s | 1 – 3 s | > 3 s |
-        | **Outbound HTTP client timeout configured** | All clients explicit ≤ 5 s | Some clients explicit | Any client uses framework default > 10 s |
-        | **Circuit breakers on critical paths** | All paths covered | Partial coverage | No circuit breakers on any critical path |
         
+        > **Not scored here:** circuit breakers (core-ng has none) and outbound HTTP client timeouts
+        > (not assessed for now). Latency is scored from the four latency rows alone.
+        >
         > **Note on thread concurrency**: if code context reveals `.get()` inside a thread-pool
         > loop (sequential blocking) or equivalent patterns that serialise async work, treat this
         > as a YELLOW structural risk even when current latency metrics are GREEN.
@@ -93,6 +97,10 @@ public class MetricScorePrompt {
         | **Peak memory as % of memory *limit*** | < 70 % | 70 % – 90 % | > 90 % |
         
         ### HPA / Replica Scaling
+
+        > **Do not judge scaling headroom.** Deployments of a service set their own `maxReplicas`, and a
+        > `maxReplicas` above the observed average replica count is normal. Report min/max replicas as
+        > configuration; `maxReplicas` versus the average replica count never sets a score.
         
         > **HPA CPU averageUtilization is relative to CPU request, not CPU limit.**
         > Kubernetes scales when `current_cpu_usage / cpu_request` hits the configured
@@ -110,7 +118,6 @@ public class MetricScorePrompt {
         | Metric | GREEN | YELLOW | RED |
         | :--- | :--- | :--- | :--- |
         | **HPA CPU effective trigger (= `averageUtilization × request/limit`) as % of CPU limit** | ≤ 75 % | 76 % – 85 % | ≥ 86 % |
-        | **HPA headroom: (maxReplicas − avgReplicas) / maxReplicas** | > 50 % | 25 % – 50 % | < 25 % |
         | **HPA configured for a stateless service with variable load** | Yes | Planned / partial | No HPA, no documented justification |
         
         ---
@@ -123,16 +130,33 @@ public class MetricScorePrompt {
         | :--- | :--- | :--- | :--- |
         | **Active connections — avg as % of `max_connections`** | < 50 % | 50 % – 75 % | > 75 % |
         | **Active connections — peak as % of `max_connections`** | < 65 % | 65 % – 85 % | > 85 % |
-        | **Slow queries — 28-day daily average** | < 10 / day | 10 – 50 / day | > 50 / day |
-        | **Slow queries — single-day spike** | < 50 | 50 – 200 | > 200 |
-        | **Replication lag — 28-day average** | < 1 s | 1 – 5 s | > 5 s |
-        | **Replication lag — peak observed** | < 10 s | 10 – 60 s | > 60 s |
-        | **Missing indexes on high-frequency query columns** | None found | 1 missing | ≥ 2 missing |
-        | **DB storage used — absolute (GB)** (Datadog `storage_used`) | < 100 GB | 100 – 500 GB | > 500 GB |
-        | **DB storage used — % of provisioned**, only when auto-grow is OFF (used ÷ StorageSizeGB) | < 50 % | 50 % – 75 % | > 75 % |
+        | **Slow queries — 28-day daily average** (shared server, at most YELLOW) | < 10 / day | ≥ 10 / day | — |
+        | **Slow queries — single-day spike** (shared server, at most YELLOW) | < 50 | ≥ 50 | — |
+        | **Missing indexes on high-frequency query columns of tables > 1 GB** | None found | 1 missing | ≥ 2 missing |
         | **Largest single table size** (MySQL) | < 5 GB | 5 – 10 GB | > 10 GB |
         | **Number of tables > 10 GB** (MySQL) | 0 | 1 | ≥ 2 |
         
+        > **Slow queries are counted for the whole MySQL server**, which many services share, so they can
+        > never make this service RED: the slow-query rows score GREEN or YELLOW only, whatever the count.
+        > Name the shared server in the rationale.
+        >
+        > **A missing index only scores on a table over 1 GB.** A table that is small in the MySQL table
+        > storage figures is scanned in milliseconds whatever the filter; mention a missing index there as
+        > a note under the rationale and leave the row GREEN. A table whose size is not known does not score.
+        >
+        > **Shared MySQL server — reminders, not scored.** Replication lag and the server's total
+        > storage used (`azure.dbformysql_flexibleservers.*`) are per **server**, and one server and its
+        > replicas serve many services. They never set this service's score: a lagging shared replica
+        > would otherwise turn every service on that database RED. Report them in the "Shared-resource
+        > reminders" list of the Persistence section with the thresholds below, as information for the
+        > team that owns the server.
+        >
+        > | Reminder | Raise it when |
+        > | :--- | :--- |
+        > | Replication lag — 28-day average | > 5 s |
+        > | Replication lag — peak observed | > 60 s |
+        > | Server storage used (GB) | > 500 GB (or > 75 % of provisioned when auto-grow is OFF) |
+        >
         > **Note on MySQL table size metrics**: the pipeline queries `information_schema` over JDBC and
         > only when both `MYSQL_HOST` and `MYSQL_DB` are set. If the query did not run, omit these rows
         > from scoring — do **not** default them to RED for missing data; only mark RED if the query ran
@@ -149,15 +173,16 @@ public class MetricScorePrompt {
         | **Connection pool — peak as % of cluster connection limit** | < 40 % | 40 % – 70 % | > 70 % |
         | **Query targeting ratio (scanned / returned) — 28-day average** | < 10 | 10 – 100 | > 100 |
         | **Query targeting ratio — peak observed** | < 20 | 20 – 100 | > 100 |
-        | **Data size — absolute (GB)** | < 100 GB | 100 – 500 GB | > 500 GB |
-        | **Data size — 28-day growth** | < 10 % | 10 % – 50 % | > 50 % |
-        | **Index size as a share of data size** | < 50 % | 50 % – 100 % | > 100 % |
-        | **Disk used — % of disk, fullest member** | < 60 % | 60 % – 80 % | > 80 % |
+        | **Database storage size** (Datadog `dbstats.storage.size`, this service's database) | < 50 GB | ≥ 50 GB (**warning only — never RED**) | — |
+        | **Database storage — 28-day growth** | < 10 % | 10 % – 50 % | > 50 % |
+        | **Index size as a share of the database's data size** | < 50 % | 50 % – 100 % | > 100 % |
         
-        > **Note on MongoDB storage**: data size, index size and disk are cluster-wide — the cluster is
-        > typically shared by many services. A YELLOW or RED here is a cluster capacity risk the
-        > service inherits; name the cluster in the finding rather than attributing the data to the
-        > service.
+        > **Note on MongoDB storage**: these rows apply to the database named in the request
+        > (`databasename` tag), not the cluster. When no database was given, or its size was not
+        > collected, omit them — do not score them and do not call them a gap. A database of 50 GB or
+        > more is a YELLOW warning that it should be reviewed (archiving, TTL, sharding); it is not a
+        > RED condition. Cluster disk used (% of disk, fullest member) is a shared-resource reminder,
+        > raised when it exceeds 80 %; it does not set this service's score.
         
         ### Redis (if used)
         
@@ -174,10 +199,10 @@ public class MetricScorePrompt {
         | Dimension | Primary Signal | Escalation Trigger |
         | :--- | :--- | :--- |
         | Traffic & Throughput | Avg RPS growth, Kafka lag | Any metric RED |
-        | Latency & Thread Concurrency | P99 average & peak | P99 avg > 500 ms **or** missing circuit breakers on critical path |
+        | Latency & Thread Concurrency | P99 average & peak | P99 avg > 500 ms |
         | Error Rates & Stability | HTTP error rate, restarts | Any restart = YELLOW; error rate > 1 % = RED |
         | Resource Saturation | Peak CPU/mem % of limit | Peak CPU > 90 % limit **or** HPA effective trigger (`averageUtilization × request/limit`) ≥ 86 % of limit |
-        | Persistence Layer | Connections %, slow queries, replication lag, storage used GB (Datadog), largest table (MySQL) | Connections > 85 % limit **or** replication lag peak > 60 s **or** storage used > 500 GB (> 75 % of provisioned when auto-grow is OFF) **or** any table > 10 GB |
+        | Persistence Layer | Connections %, slow queries, largest table (MySQL), database storage (MongoDB, ≥ 50 GB = YELLOW) | Connections > 85 % limit **or** any table > 10 GB (shared-server lag / storage and cluster disk are reminders, not triggers) |
             """;
     }
 }

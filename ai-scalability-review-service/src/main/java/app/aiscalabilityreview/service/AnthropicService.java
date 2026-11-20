@@ -97,6 +97,8 @@ public class AnthropicService {
             case CLAUDE_OPUS_5 -> "claude-opus-5";
             case GEMINI_3_5_FLASH -> "gemini-3.5-flash";
             case GEMINI_3_1_FLASH_LITE -> "gemini-3.1-flash-lite";
+            case GEMINI_3_8_FLASH -> "gemini-3.8-flash";
+            case GEMINI_3_5_FLASH_LITE -> "gemini-3.5-flash-lite";
         };
     }
 

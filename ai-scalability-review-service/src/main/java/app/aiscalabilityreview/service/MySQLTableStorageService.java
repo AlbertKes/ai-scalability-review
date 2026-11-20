@@ -23,7 +23,7 @@ import java.util.Map;
  * Collects the top-20 MySQL tables by storage size for the local review, over JDBC, and writes them
  * to {@code mysql-tables.md} for the metric collection stage to copy into its output.
  *
- * <p>This does not go through the MySQL MCP server, because it cannot: Gemini CLI 0.46 wraps every
+ * <p>This does not go through the MySQL MCP server, because it cannot: Gemini CLI (first seen on 0.46, not re-tested on 0.69) wraps every
  * MCP response in {@code fixStructuredContent()}, which JSON-parses the first text block and assigns
  * it to {@code result.structuredContent}, and the MCP SDK then validates that field against
  * {@code record(string, unknown)}. {@code @benborla29/mcp-server-mysql} serialises result rows as a

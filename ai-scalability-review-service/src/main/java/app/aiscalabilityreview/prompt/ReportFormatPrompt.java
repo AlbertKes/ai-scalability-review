@@ -168,8 +168,6 @@ public class ReportFormatPrompt {
         - **P95 (28-day average)**: `<value> ms` [Source: ...]
         - **P99 (28-day average)**: `<value> ms` [Source: ...]
         - **P99 (peak observed)**: `<value> ms` at <YYYY-MM-DD HH:mm> [Source: ...]
-        - **Outbound HTTP client timeouts**: <configured values, or none configured> [Source: context ...]
-        - **Circuit breakers on critical paths**: <covered / partial / none> [Source: context ...]
 
         ### 3.3 Error Rates & Stability
         - **HTTP error rate (28-day average)**: `<value>%` [Source: ...]
@@ -191,14 +189,16 @@ public class ReportFormatPrompt {
         `NOT_COLLECTED` line. A datastore the service does not have is not a gap in the data.
         - **Connection Pool**: average `<value>` (`<value>%` of max_connections `<value>`), peak `<value>` (`<value>%`) [Source: ...]
         - **Slow queries**: `<value>` per day average, worst day `<value>` [Source: ...]
-        - **Replication lag**: average `<value> s`, peak `<value> s` [Source: ...]
-        - **Storage used**: `<value> GB` (auto-grow ON: absolute figure only; auto-grow OFF: `<value>%` of `<provisioned>` GB) [Source: ...]
         - **Largest table**: `<table>` at `<value> GB`; tables above 10 GB: `<value>` [Source: ...]
         - **MongoDB op latency**: read average `<value> ms`, write average `<value> ms`, read peak `<value> ms` [Source: ...]
         - **MongoDB connections**: peak `<value>` (`<value>%` of the cluster limit `<value>`) [Source: ...]
         - **MongoDB query targeting ratio**: average `<value>`, peak `<value>` [Source: ...]
-        - **MongoDB storage** (cluster `<name>`, shared): data `<value> GB`, indexes `<value> GB` (`<value>%` of data), `<value>` collections, `<value>` documents; 28-day data growth `<value>%` [Source: ...]
-        - **MongoDB disk**: fullest member `<value> GB` of `<value> GB` (`<value>%`) [Source: ...]
+        - **MongoDB database storage** (database `<name>`): on-disk `<value> GB`, data `<value> GB`, indexes `<value> GB` (`<value>%` of data), `<value>` collections, `<value>` documents; 28-day growth `<value>%`; status `<OK / WARNING if ≥ 50 GB>` [Source: ...]. Omit when no Atlas database was given.
+        - **Shared-resource reminders** (information for the team that owns the resource; not scored, not attributed to this service). One line each, only for the datastores the service uses; write `None to raise` when all are within bounds:
+          - MySQL server `<host>` replication lag: average `<value> s`, peak `<value> s` — raise when average > 5 s or peak > 60 s [Source: ...]
+          - MySQL server `<host>` storage used: `<value> GB` (auto-grow ON: absolute only; OFF: `<value>%` of `<provisioned>` GB) — raise when > 500 GB or > 75 % [Source: ...]
+          - Atlas cluster `<name>` disk: fullest member `<value> GB` of `<value> GB` (`<value>%`) — raise when > 80 % [Source: ...]
+          - Atlas cluster `<name>` largest databases (only when no Atlas database was given): `<name> <value> GB`, … [Source: ...]
 
         ### 3.6 Kafka Consumer Lag
         Include this sub-section only when the service has Kafka consumer groups; omit it entirely
@@ -234,7 +234,7 @@ public class ReportFormatPrompt {
         ### Dimension 4 — Resource Saturation: <GREEN | YELLOW | RED>
         ### Dimension 5 — Persistence Layer: <GREEN | YELLOW | RED>
 
-        **Overall Score**: <GREEN | YELLOW | RED>  (the worst of the five dimensions)
+        **Overall Score**: <GREEN | YELLOW | RED>  (≥ 3 RED dimensions → RED; exactly 2 RED or more than 2 YELLOW → YELLOW; otherwise GREEN)
         ```
 
         Each of the five dimensions repeats the full `**Score**` / `**Rationale**` block.
@@ -301,13 +301,14 @@ public class ReportFormatPrompt {
            which. Reuse the codebase's own number where one exists: if the sibling clients in the
            same module are registered with a 5000 ms timeout, recommend 5000 ms.
         4. **Do not recommend what already exists.** Before writing an action, check the code context
-           for the mechanism it asks for. If a semaphore, cache guard, index, circuit breaker or
+           for the mechanism it asks for. If a semaphore, cache guard, index or
            async dispatch is already in place, either drop the recommendation or narrow it to the
            part that genuinely is missing, and say what is already covered.
         5. **Do not size a service change from a shared-resource metric.** The
            `azure.dbformysql_flexibleservers.*` metrics are per **server**, and one flexible server
-           hosts every service in the domain. Such a number may motivate a recommendation owned by
-           the platform team, but it cannot be attributed to this service's behaviour.
+           hosts every service in the domain, and Atlas cluster-level figures are likewise shared. They
+           are listed as reminders for the owning team, never as a finding against this service and
+           never as the basis of a recommendation sized for it.
 
         The Executive Summary's numbered critical-findings list restates these same claims, so a
         finding that fails any rule above must not appear there either.
@@ -340,7 +341,7 @@ public class ReportFormatPrompt {
         - [ ] Every derived percentage names the denominator it used
         - [ ] Exactly 5 scoring dimensions, with the fixed names and the `### Dimension n — name: SCORE` heading
         - [ ] Every dimension has a `**Score**` line and a `**Rationale**` line citing a concrete value
-        - [ ] Overall Score equals the worst dimension score
+        - [ ] Overall Score follows the rule (≥ 3 RED → RED; 2 RED or > 2 YELLOW → YELLOW; else GREEN)
         - [ ] Capacity table has exactly 4 rows and its `Current (Base)` status equals the Overall Score
         - [ ] Baseline weekly requests equal baseline avg RPS x 604800
         - [ ] At most 7 recommendations, sorted High then Medium then Low, each with Finding and Action
